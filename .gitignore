@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Data & cache (contains real PII + Stripe data)
+data/
+data/*
+*.cache
+stripe-cache.json
+
+# Logs
+*.log
+logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
