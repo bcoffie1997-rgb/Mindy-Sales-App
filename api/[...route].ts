@@ -1,21 +1,58 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
+import { createClient } from '@supabase/supabase-js'
+import Stripe from 'stripe'
 
 const AGENTS = ['gc-lead-intake','gc-email-responder','gc-appointment-setter','gc-post-call','gc-crm-morning','gc-crm-evening','gc-qa-health']
 const PROPOSAL_KEYWORDS = ['proposal sent','proposal delivered','pricing sent','engagement letter','sent proposal','sent pricing','payment link']
 
-// Lazily-loaded modules (dynamic import lets us capture load errors as JSON)
-let supabase: any, supabaseReady = false, initError: string | null = null, supabaseUrlValue = ''
-let getStripe: any, fetchAllCharges: any, matchStripeToLead: any
-let importError: string | null = null
-let loaded = false
+// ── Supabase client (inlined; no relative imports to keep ESM happy) ──
+const SUPA_URL = (process.env.SUPABASE_URL || '').trim()
+const SUPA_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim()
+let initError: string | null = null
+let supabase: any
+try {
+  supabase = createClient(SUPA_URL || 'https://placeholder.supabase.co', SUPA_KEY || 'placeholder', { auth: { persistSession: false } })
+} catch (err: any) {
+  initError = err?.message || String(err)
+  supabase = createClient('https://placeholder.supabase.co', 'placeholder', { auth: { persistSession: false } })
+}
+const supabaseReady = !!(SUPA_URL && SUPA_KEY) && !initError
+const supabaseUrlValue = SUPA_URL
 
-async function ensureLoaded() {
-  if (loaded) return
-  const sb = await import('./_lib/supabase')
-  supabase = sb.supabase; supabaseReady = sb.supabaseReady; initError = sb.initError; supabaseUrlValue = sb.supabaseUrlValue
-  const st = await import('./_lib/stripe')
-  getStripe = st.getStripe; fetchAllCharges = st.fetchAllCharges; matchStripeToLead = st.matchStripeToLead
-  loaded = true
+// ── Stripe helpers (inlined) ──
+const CACHE_TTL_MS = 30 * 60 * 1000
+function getStripe() {
+  const key = process.env.STRIPE_SECRET_KEY
+  if (!key) return null
+  return new Stripe(key, { telemetry: false })
+}
+async function fetchAllCharges(since: Date): Promise<any[]> {
+  const stripe = getStripe()
+  if (!stripe) return []
+  const { data: cached } = await supabase.from('stripe_cache').select('data, fetched_at').eq('id', 1).single()
+  if (cached && (Date.now() - new Date(cached.fetched_at).getTime()) < CACHE_TTL_MS) {
+    const cutoff = Math.floor(since.getTime() / 1000)
+    return (cached.data as any[]).filter((c: any) => c.created >= cutoff)
+  }
+  const twelveMonthsAgo = new Date(); twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12)
+  const allCharges: any[] = []
+  let hasMore = true, startingAfter: string | undefined
+  while (hasMore) {
+    const params: any = { limit: 100, created: { gte: Math.floor(twelveMonthsAgo.getTime() / 1000) } }
+    if (startingAfter) params.starting_after = startingAfter
+    const batch = await stripe.charges.list(params)
+    allCharges.push(...batch.data.filter((c: any) => c.status === 'succeeded'))
+    hasMore = batch.has_more
+    if (batch.data.length > 0) startingAfter = batch.data[batch.data.length - 1].id
+  }
+  await supabase.from('stripe_cache').upsert({ id: 1, data: allCharges, fetched_at: new Date().toISOString() })
+  const cutoff = Math.floor(since.getTime() / 1000)
+  return allCharges.filter((c: any) => c.created >= cutoff)
+}
+function matchStripeToLead(email: string, name: string, leads: any[]): any | null {
+  if (!email && !name) return null
+  const e = (email || '').toLowerCase(), n = (name || '').toLowerCase()
+  return leads.find((l: any) => (e && l.email && l.email.toLowerCase() === e) || (n && l.name && l.name.toLowerCase() === n)) || null
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -26,14 +63,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const slug = (req.query.route as string[]) || []
   const path = slug.join('/')
-
-  // Load dependencies, capturing any import error as readable JSON
-  try {
-    await ensureLoaded()
-  } catch (e: any) {
-    importError = e?.message || String(e)
-    return res.status(500).json({ error: 'import_failed', detail: importError, stack: (e?.stack || '').split('\n').slice(0, 5) })
-  }
 
   // Debug: return env var + connection status for /api/health
   if (path === 'health') {
