@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { supabase } from './_lib/supabase'
+import { supabase, supabaseReady } from './_lib/supabase'
 import { getStripe, fetchAllCharges, matchStripeToLead } from './_lib/stripe'
 
 const AGENTS = ['gc-lead-intake','gc-email-responder','gc-appointment-setter','gc-post-call','gc-crm-morning','gc-crm-evening','gc-qa-health']
@@ -13,15 +13,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const slug = (req.query.route as string[]) || []
   const path = slug.join('/')
+
+  // Debug: return env var status for /api/health
+  if (path === 'health') {
+    return res.json({
+      status: supabaseReady ? 'ok' : 'missing_env',
+      supabase_url_set: !!process.env.SUPABASE_URL,
+      supabase_key_set: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+      stripe_key_set: !!process.env.STRIPE_SECRET_KEY,
+      env_keys: Object.keys(process.env).filter(k => k.includes('SUPA') || k.includes('STRIPE') || k.includes('VERCEL')).sort()
+    })
+  }
   const method = req.method || 'GET'
 
   try {
-    // GET /api/health
-    if (path === 'health') {
-      const { error } = await supabase.from('leads').select('id').limit(1)
-      return res.json({ status: error ? 'degraded' : 'ok', db: error ? error.message : 'connected' })
-    }
-
     // GET /api/stats
     if (path === 'stats') {
       const [{ data: all, error }, { data: events }] = await Promise.all([
