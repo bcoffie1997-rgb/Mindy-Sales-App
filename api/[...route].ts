@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { supabase, supabaseReady } from './_lib/supabase'
+import { supabase, supabaseReady, initError, supabaseUrlValue } from './_lib/supabase'
 import { getStripe, fetchAllCharges, matchStripeToLead } from './_lib/stripe'
 
 const AGENTS = ['gc-lead-intake','gc-email-responder','gc-appointment-setter','gc-post-call','gc-crm-morning','gc-crm-evening','gc-qa-health']
@@ -14,14 +14,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const slug = (req.query.route as string[]) || []
   const path = slug.join('/')
 
-  // Debug: return env var status for /api/health
+  // Debug: return env var + connection status for /api/health
   if (path === 'health') {
+    let dbCheck = 'not_attempted'
+    if (supabaseReady) {
+      try {
+        const { error } = await supabase.from('leads').select('id').limit(1)
+        dbCheck = error ? `query_error: ${error.message}` : 'connected'
+      } catch (e: any) {
+        dbCheck = `exception: ${e?.message || e}`
+      }
+    }
     return res.json({
-      status: supabaseReady ? 'ok' : 'missing_env',
+      status: supabaseReady ? 'ok' : 'missing_or_bad_env',
       supabase_url_set: !!process.env.SUPABASE_URL,
+      supabase_url_preview: supabaseUrlValue ? supabaseUrlValue.slice(0, 30) + '...' : '(empty)',
       supabase_key_set: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
       stripe_key_set: !!process.env.STRIPE_SECRET_KEY,
-      env_keys: Object.keys(process.env).filter(k => k.includes('SUPA') || k.includes('STRIPE') || k.includes('VERCEL')).sort()
+      init_error: initError,
+      db_check: dbCheck,
+      env_keys: Object.keys(process.env).filter(k => k.includes('SUPA') || k.includes('STRIPE')).sort()
     })
   }
   const method = req.method || 'GET'
