@@ -3,7 +3,7 @@ import { supabase } from './supabase'
 
 const CACHE_TTL_MS = 30 * 60 * 1000
 
-export function getStripe(): Stripe | null {
+export function getStripe() {
   const key = process.env.STRIPE_SECRET_KEY
   if (!key) return null
   return new Stripe(key, { telemetry: false })
