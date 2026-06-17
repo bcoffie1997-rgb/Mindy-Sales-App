@@ -1,9 +1,22 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { supabase, supabaseReady, initError, supabaseUrlValue } from './_lib/supabase'
-import { getStripe, fetchAllCharges, matchStripeToLead } from './_lib/stripe'
 
 const AGENTS = ['gc-lead-intake','gc-email-responder','gc-appointment-setter','gc-post-call','gc-crm-morning','gc-crm-evening','gc-qa-health']
 const PROPOSAL_KEYWORDS = ['proposal sent','proposal delivered','pricing sent','engagement letter','sent proposal','sent pricing','payment link']
+
+// Lazily-loaded modules (dynamic import lets us capture load errors as JSON)
+let supabase: any, supabaseReady = false, initError: string | null = null, supabaseUrlValue = ''
+let getStripe: any, fetchAllCharges: any, matchStripeToLead: any
+let importError: string | null = null
+let loaded = false
+
+async function ensureLoaded() {
+  if (loaded) return
+  const sb = await import('./_lib/supabase')
+  supabase = sb.supabase; supabaseReady = sb.supabaseReady; initError = sb.initError; supabaseUrlValue = sb.supabaseUrlValue
+  const st = await import('./_lib/stripe')
+  getStripe = st.getStripe; fetchAllCharges = st.fetchAllCharges; matchStripeToLead = st.matchStripeToLead
+  loaded = true
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*')
@@ -13,6 +26,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const slug = (req.query.route as string[]) || []
   const path = slug.join('/')
+
+  // Load dependencies, capturing any import error as readable JSON
+  try {
+    await ensureLoaded()
+  } catch (e: any) {
+    importError = e?.message || String(e)
+    return res.status(500).json({ error: 'import_failed', detail: importError, stack: (e?.stack || '').split('\n').slice(0, 5) })
+  }
 
   // Debug: return env var + connection status for /api/health
   if (path === 'health') {
