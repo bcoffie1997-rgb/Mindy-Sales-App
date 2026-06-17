@@ -175,7 +175,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (path === 'reports') {
       const { data, error } = await supabase.from('reports').select('filename,category').order('filename',{ascending:false})
       if (error) throw error
-      return res.json({ daily:(data||[]).filter(r=>r.category==='daily').map(r=>r.filename), weekly:(data||[]).filter(r=>r.category==='weekly').map(r=>r.filename) })
+      return res.json({ daily:(data||[]).filter((r:any)=>r.category==='daily').map((r:any)=>r.filename), weekly:(data||[]).filter((r:any)=>r.category==='weekly').map((r:any)=>r.filename) })
     }
 
     // GET /api/reports/:type
