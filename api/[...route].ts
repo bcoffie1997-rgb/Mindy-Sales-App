@@ -62,7 +62,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
   if (req.method === 'OPTIONS') return res.status(200).end()
 
-  const slug = (req.query.route as string[]) || []
+  // Derive the route from the URL itself (robust across Vercel param shapes)
+  const rawRoute = req.query.route
+  let slug: string[]
+  if (Array.isArray(rawRoute)) slug = rawRoute
+  else if (typeof rawRoute === 'string' && rawRoute) slug = rawRoute.split('/')
+  else {
+    // Fall back to parsing the request URL
+    const urlPath = (req.url || '').split('?')[0].replace(/^\/api\/?/, '')
+    slug = urlPath ? urlPath.split('/') : []
+  }
   const path = slug.join('/')
 
   // Debug: return env var + connection status for /api/health
@@ -293,7 +302,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.json({ enabled:true,total:transactions.length,results:filtered })
     }
 
-    res.status(404).json({ error:'Not found' })
+    res.status(404).json({ error:'Not found', debug: { path, slug, rawRoute, url: req.url } })
   } catch (err:any) {
     console.error(err)
     res.status(500).json({ error: err.message })
