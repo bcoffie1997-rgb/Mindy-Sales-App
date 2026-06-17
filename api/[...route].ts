@@ -302,6 +302,65 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.json({ enabled:true,total:transactions.length,results:filtered })
     }
 
+    // POST or GET /api/seed-from-stripe?key=govcon-seed
+    // One-time: reconstruct client roster from Stripe payers into Supabase
+    if (path === 'seed-from-stripe') {
+      if ((req.query.key as string) !== 'govcon-seed') return res.status(403).json({ error: 'Forbidden — add ?key=govcon-seed' })
+      if (!getStripe()) return res.status(400).json({ error: 'Stripe not configured' })
+
+      const now = new Date()
+      const twelveMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 12, 1)
+      const allCharges = await fetchAllCharges(twelveMonthsAgo)
+
+      // Aggregate charges per customer
+      const payers: Record<string, any> = {}
+      for (const c of allCharges) {
+        const email = (c.billing_details?.email || c.receipt_email || '').toLowerCase()
+        const name = c.billing_details?.name || ''
+        const key = email || name.toLowerCase()
+        if (!key) continue
+        if (!payers[key]) payers[key] = { email, name, total: 0, count: 0, lastDate: '', firstDate: '', lastDesc: '' }
+        payers[key].total += c.amount / 100
+        payers[key].count++
+        const dt = new Date(c.created * 1000).toISOString()
+        if (!payers[key].firstDate || dt < payers[key].firstDate) payers[key].firstDate = dt
+        if (dt > payers[key].lastDate) { payers[key].lastDate = dt; payers[key].lastDesc = c.description || c.metadata?.product || '' }
+        if (name && !payers[key].name) payers[key].name = name
+      }
+
+      // Build upsert rows
+      const rows = Object.values(payers).map((p: any) => {
+        const idBase = (p.email || p.name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60)
+        return {
+          id: 'stripe-' + idBase,
+          type: 'client',
+          name: p.name || p.email || 'Unknown',
+          email: p.email || null,
+          status: 'paid',
+          source: 'stripe',
+          client_status: 'active',
+          client_amount: Math.round(p.total * 100) / 100,
+          client_product: p.lastDesc || null,
+          client_start_date: p.firstDate ? p.firstDate.slice(0, 10) : null,
+          first_contact_date: p.firstDate ? p.firstDate.slice(0, 10) : null,
+          last_action: `Imported from Stripe — ${p.count} payment(s), $${Math.round(p.total)} total`,
+          last_action_date: p.lastDate || new Date().toISOString(),
+          notes: `Auto-imported from Stripe. Lifetime: $${Math.round(p.total)} across ${p.count} charge(s).`
+        }
+      })
+
+      // Upsert in batches
+      let inserted = 0
+      for (let i = 0; i < rows.length; i += 100) {
+        const batch = rows.slice(i, i + 100)
+        const { error, count } = await supabase.from('leads').upsert(batch, { onConflict: 'id', count: 'exact' })
+        if (error) return res.status(500).json({ error: error.message, insertedSoFar: inserted })
+        inserted += batch.length
+      }
+
+      return res.json({ ok: true, stripePayers: rows.length, upsertedClients: inserted, totalChargesScanned: allCharges.length })
+    }
+
     res.status(404).json({ error:'Not found', debug: { path, slug, rawRoute, url: req.url } })
   } catch (err:any) {
     console.error(err)
