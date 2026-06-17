@@ -94,3 +94,12 @@ CREATE INDEX IF NOT EXISTS agent_events_agent_idx ON agent_events(agent_name);
 CREATE INDEX IF NOT EXISTS agent_events_ts_idx ON agent_events(ts DESC);
 CREATE INDEX IF NOT EXISTS reports_filename_idx ON reports(filename);
 CREATE INDEX IF NOT EXISTS reports_category_idx ON reports(category);
+
+-- Disable Row Level Security: this DB is only accessed server-side via the
+-- API using the service role key; it is never queried from the browser.
+ALTER TABLE leads        DISABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_events DISABLE ROW LEVEL SECURITY;
+ALTER TABLE calls_cache  DISABLE ROW LEVEL SECURITY;
+ALTER TABLE reports      DISABLE ROW LEVEL SECURITY;
+ALTER TABLE proposals    DISABLE ROW LEVEL SECURITY;
+ALTER TABLE stripe_cache DISABLE ROW LEVEL SECURITY;
