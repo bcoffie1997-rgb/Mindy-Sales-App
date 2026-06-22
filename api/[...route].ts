@@ -480,6 +480,102 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       })
     }
 
+    // GET /api/transcripts  (optional ?lead=:id to filter to one lead)
+    if (path === 'transcripts' && method === 'GET') {
+      let q = supabase.from('transcripts').select('*').order('meeting_date', { ascending: false }).limit(200)
+      if (req.query.lead) q = q.eq('matched_lead_id', req.query.lead as string)
+      const { data, error } = await q
+      if (error) throw error
+      return res.json(data || [])
+    }
+
+    // GET or POST /api/sync-fireflies?key=govcon-seed
+    // Pull call transcripts + summaries from Fireflies → Supabase transcripts table
+    if (path === 'sync-fireflies') {
+      if ((req.query.key as string) !== 'govcon-seed') return res.status(403).json({ error: 'Forbidden — add ?key=govcon-seed' })
+
+      const FF_KEY = process.env.FIREFLIES_API_KEY
+      if (!FF_KEY) return res.status(400).json({ error: 'FIREFLIES_API_KEY env var not set' })
+
+      const ffQuery = `query Transcripts($limit: Int, $skip: Int) {
+        transcripts(limit: $limit, skip: $skip) {
+          id
+          title
+          date
+          duration
+          transcript_url
+          participants
+          meeting_attendees { displayName email }
+          summary { overview short_summary action_items keywords bullet_gist }
+        }
+      }`
+
+      const allTranscripts: any[] = []
+      let skip = 0
+      const limit = 25
+      while (true) {
+        const resp = await fetch('https://api.fireflies.ai/graphql', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${FF_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: ffQuery, variables: { limit, skip } })
+        })
+        if (!resp.ok) {
+          const txt = await resp.text()
+          return res.status(502).json({ error: `Fireflies API error ${resp.status}`, detail: txt.slice(0, 500) })
+        }
+        const json: any = await resp.json()
+        if (json.errors) return res.status(502).json({ error: 'Fireflies GraphQL error', detail: json.errors })
+        const batch: any[] = json.data?.transcripts || []
+        allTranscripts.push(...batch)
+        if (batch.length < limit) break
+        skip += limit
+        if (skip > 400) break // safety cap (~400 most recent calls)
+      }
+
+      // Load existing leads/clients for email matching
+      const { data: allLeads } = await supabase.from('leads').select('id,name,email')
+      const leadByEmail: Record<string, any> = {}
+      for (const l of (allLeads || [])) { if (l.email) leadByEmail[l.email.toLowerCase()] = l }
+
+      const rows = allTranscripts.map((t: any) => {
+        const attendees = t.meeting_attendees || []
+        const emails = attendees.map((a: any) => (a.email || '').toLowerCase()).filter(Boolean)
+        let matched: any = null
+        for (const e of emails) { if (leadByEmail[e]) { matched = leadByEmail[e]; break } }
+        const s = t.summary || {}
+        const actionItems = Array.isArray(s.action_items) ? s.action_items.join('\n') : (s.action_items || null)
+        return {
+          id: t.id,
+          title: t.title || 'Untitled call',
+          meeting_date: t.date ? new Date(t.date).toISOString() : null,
+          duration: t.duration || null,
+          transcript_url: t.transcript_url || null,
+          participants: t.participants || emails,
+          overview: s.overview || s.bullet_gist || null,
+          short_summary: s.short_summary || null,
+          action_items: actionItems,
+          keywords: s.keywords || [],
+          matched_lead_id: matched?.id || null,
+          metadata: { attendees }
+        }
+      })
+
+      let upserted = 0
+      for (let i = 0; i < rows.length; i += 100) {
+        const batch = rows.slice(i, i + 100)
+        const { error } = await supabase.from('transcripts').upsert(batch, { onConflict: 'id' })
+        if (error) return res.status(500).json({ error: error.message, upsertedSoFar: upserted })
+        upserted += batch.length
+      }
+
+      return res.json({
+        ok: true,
+        transcriptsFound: allTranscripts.length,
+        upserted,
+        matchedToLeads: rows.filter((r: any) => r.matched_lead_id).length
+      })
+    }
+
     res.status(404).json({ error:'Not found', debug: { path, slug, rawRoute, url: req.url } })
   } catch (err:any) {
     console.error(err)

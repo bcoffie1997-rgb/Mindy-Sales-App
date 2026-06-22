@@ -76,6 +76,23 @@ CREATE TABLE IF NOT EXISTS stripe_cache (
 INSERT INTO stripe_cache (id, data) VALUES (1, '[]')
   ON CONFLICT (id) DO NOTHING;
 
+-- Call transcripts (from Fireflies)
+CREATE TABLE IF NOT EXISTS transcripts (
+  id TEXT PRIMARY KEY,
+  title TEXT,
+  meeting_date TIMESTAMPTZ,
+  duration NUMERIC,
+  transcript_url TEXT,
+  participants JSONB DEFAULT '[]',
+  overview TEXT,
+  short_summary TEXT,
+  action_items TEXT,
+  keywords JSONB DEFAULT '[]',
+  matched_lead_id TEXT,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Auto-update updated_at on leads
 CREATE OR REPLACE FUNCTION update_updated_at()
 RETURNS TRIGGER AS $$
@@ -103,3 +120,4 @@ ALTER TABLE calls_cache  DISABLE ROW LEVEL SECURITY;
 ALTER TABLE reports      DISABLE ROW LEVEL SECURITY;
 ALTER TABLE proposals    DISABLE ROW LEVEL SECURITY;
 ALTER TABLE stripe_cache DISABLE ROW LEVEL SECURITY;
+ALTER TABLE transcripts  DISABLE ROW LEVEL SECURITY;
