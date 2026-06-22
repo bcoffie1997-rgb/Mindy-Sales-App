@@ -1,20 +1,20 @@
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom'
-import { LayoutDashboard, Users, UserCheck, Phone, Activity, FileText, DollarSign } from 'lucide-react'
+import { LayoutDashboard, Users, UserCheck, Phone, FileText, DollarSign, Terminal } from 'lucide-react'
 import Dashboard from './components/Dashboard'
 import Leads from './components/Leads'
 import Clients from './components/Clients'
 import TodayCalls from './components/TodayCalls'
-import ActivityFeed from './components/ActivityFeed'
 import Reports from './components/Reports'
 import Revenue from './components/Revenue'
+import CommandCenter from './components/CommandCenter'
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/command-center', icon: Terminal, label: 'Command Center' },
   { to: '/calls', icon: Phone, label: 'Calls' },
   { to: '/leads', icon: Users, label: 'Leads' },
   { to: '/clients', icon: UserCheck, label: 'Clients' },
   { to: '/revenue', icon: DollarSign, label: 'Revenue' },
-  { to: '/activity', icon: Activity, label: 'Activity' },
   { to: '/reports', icon: FileText, label: 'Reports' },
 ]
 
@@ -54,23 +54,17 @@ export default function App() {
               </NavLink>
             ))}
           </nav>
-          <div className="p-4 border-t border-white/10">
-            <div className="flex items-center gap-2 text-xs text-slate-400">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              7 Agents Active
-            </div>
-          </div>
         </aside>
 
         {/* Main */}
         <main className="flex-1 overflow-auto bg-slate-950">
           <Routes>
             <Route path="/" element={<Dashboard />} />
+            <Route path="/command-center" element={<CommandCenter />} />
             <Route path="/calls" element={<TodayCalls />} />
             <Route path="/leads" element={<Leads />} />
             <Route path="/clients" element={<Clients />} />
             <Route path="/revenue" element={<Revenue />} />
-            <Route path="/activity" element={<ActivityFeed />} />
             <Route path="/reports" element={<Reports />} />
           </Routes>
         </main>

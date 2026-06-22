@@ -1,12 +1,42 @@
+import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import fs from 'fs'
 import path from 'path'
 import Stripe from 'stripe'
+import { agents, getAgent } from './agents/index.js'
+import { appendEvents } from './agents/logger.js'
+import { loadConfig } from './config.js'
+import { agentSchedules } from './schedules.js'
+import { SlackClient } from './integrations/slack.js'
+import { GmailClient } from './integrations/gmail.js'
+import { CalendlyClient } from './integrations/calendly.js'
+import { GoogleCalendarClient } from './integrations/calendar.js'
+import { FirefliesClient } from './integrations/fireflies.js'
+import type { AgentContext } from './agents/types.js'
 
 const app = express()
 const PORT = 3007
 const DATA_DIR = path.resolve(import.meta.dirname, '../data')
+
+function getConfig() {
+  return loadConfig(DATA_DIR)
+}
+
+function getAgentContext(): AgentContext {
+  const config = getConfig()
+  return {
+    dataDir: DATA_DIR,
+    config,
+    now: new Date(),
+    timezone: config?.timezone || 'America/New_York',
+    slack: new SlackClient(config),
+    gmail: new GmailClient(config),
+    calendly: new CalendlyClient(config),
+    calendar: new GoogleCalendarClient(config),
+    fireflies: new FirefliesClient(config),
+  }
+}
 
 app.use(cors())
 app.use(express.json())
@@ -100,28 +130,6 @@ app.get('/api/stats', (_req, res) => {
     clientsByStatus[cs] = (clientsByStatus[cs] || 0) + 1
   }
 
-  // Agent health from events
-  const now = Date.now()
-  const events = readJSONL('agent-events.jsonl')
-  const agents = ['gc-lead-intake', 'gc-email-responder', 'gc-appointment-setter', 'gc-post-call', 'gc-crm-morning', 'gc-crm-evening', 'gc-qa-health']
-  const agentHealth: Record<string, any> = {}
-
-  for (const agent of agents) {
-    const runs = events.filter((e: any) => e.from === agent && e.type === 'run_summary')
-    const last = runs[runs.length - 1]
-    const runsToday = runs.filter((e: any) => {
-      const d = new Date(e.ts)
-      const today = new Date()
-      return d.toDateString() === today.toDateString()
-    }).length
-
-    agentHealth[agent] = {
-      lastRun: last?.ts || null,
-      runsToday,
-      status: last ? (now - new Date(last.ts).getTime() < 86400000 ? 'ok' : 'stale') : 'never'
-    }
-  }
-
   // Count proposals more broadly — status=proposal_sent OR last_action/notes mention proposal/pricing sent
   const proposalKeywords = ['proposal sent', 'proposal delivered', 'pricing sent', 'engagement letter', 'sent proposal', 'sent pricing', 'payment link']
   const proposalsOut = all.filter((l: any) => {
@@ -138,7 +146,6 @@ app.get('/api/stats', (_req, res) => {
     byStatus,
     clientsByTier,
     clientsByStatus,
-    agentHealth,
     proposalsOut,
     recentLeads: leads.filter((l: any) => l.status !== 'paid').slice(-5).reverse(),
     recentClients: clients.slice(-5).reverse()
@@ -207,7 +214,7 @@ app.get('/api/calls', (_req, res) => {
 })
 
 // --- Stripe Revenue API ---
-const config = readJSON('config.json')
+const config = getConfig()
 const stripe = config?.stripe?.api_key ? new Stripe(config.stripe.api_key, { telemetry: false }) : null
 
 // Stripe data cache — disk-backed, refreshes every 30 minutes
@@ -690,5 +697,90 @@ app.get('/api/revenue/report', async (_req, res) => {
 })
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok' }))
+
+// --- New in-code agents ---
+
+app.get('/api/agents', (_req, res) => {
+  res.json(agents.map(a => ({ id: a.id, name: a.name })))
+})
+
+app.post('/api/agents/:id/run', async (req, res) => {
+  const agent = getAgent(req.params.id)
+  if (!agent) return res.status(404).json({ error: 'Agent not found' })
+
+  try {
+    const result = await agent.run(getAgentContext())
+    appendEvents(DATA_DIR, result.events)
+    res.json({ agent: agent.id, name: agent.name, ...result })
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/api/agents/run-all', async (_req, res) => {
+  const results = []
+  for (const agent of agents) {
+    try {
+      const result = await agent.run(getAgentContext())
+      appendEvents(DATA_DIR, result.events)
+      results.push({ agent: agent.id, name: agent.name, ...result })
+    } catch (err: any) {
+      results.push({ agent: agent.id, name: agent.name, success: false, errors: [err.message], events: [] })
+    }
+  }
+  res.json({ results })
+})
+
+// --- Command Center ---
+
+app.get('/api/command-center', (_req, res) => {
+  const events = readJSONL('agent-events.jsonl')
+  const cutoff = new Date(Date.now() - 24 * 3600000).toISOString()
+
+  // Build per-agent status from events
+  const agentStatuses = agentSchedules.map((schedule) => {
+    const agentEvents = events.filter((e: any) => e.from === schedule.id)
+    const lastEvent = agentEvents[agentEvents.length - 1]
+    const lastSummary = agentEvents.reverse().find((e: any) => e.type === 'run_summary')
+    const runsLast24h = agentEvents.filter((e: any) => e.ts >= cutoff && e.type === 'run_summary').length
+
+    let status: 'idle' | 'running' | 'error' | 'offline' = 'idle'
+    if (lastEvent?.type === 'run_start') status = 'running'
+    else if (lastSummary && lastSummary.payload?.errors?.length > 0) status = 'error'
+    else if (!lastSummary) status = 'offline'
+
+    return {
+      ...schedule,
+      lastRun: lastSummary?.ts || lastEvent?.ts || null,
+      lastSummary: lastSummary?.payload || null,
+      runsLast24h,
+      status,
+    }
+  })
+
+  // Report integration status from each client's REAL auth state (isEnabled),
+  // not from config heuristics — e.g. calendarId defaults to 'primary', which made
+  // the calendar badge show "connected" even with no credentials. Built fresh each
+  // request so the badges reflect the current .env without a restart.
+  const ctx = getAgentContext()
+  res.json({
+    agents: agentStatuses,
+    recentEvents: events.slice(-50).reverse(),
+    system: {
+      uptime: process.uptime(),
+      timezone: ctx.timezone,
+      serverTime: new Date().toISOString(),
+      integrations: {
+        stripe: !!stripe,
+        slack: ctx.slack.isEnabled(),
+        gmail: ctx.gmail.isEnabled(),
+        calendar: ctx.calendar.isEnabled(),
+        calendly: ctx.calendly.isEnabled(),
+        fireflies: ctx.fireflies.isEnabled(),
+        openai: !!ctx.config?.integrations?.openai?.apiKey,
+      },
+    },
+  })
+})
 
 app.listen(PORT, () => console.log(`Sales Dashboard API running on port ${PORT}`))

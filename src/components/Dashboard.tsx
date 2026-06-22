@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Users, UserCheck, Flame, Zap, Mail, Phone, FileText, CheckCircle, XCircle, Clock, AlertTriangle, DollarSign } from 'lucide-react'
+import { Users, UserCheck, Flame, Phone, FileText, DollarSign } from 'lucide-react'
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 
 interface Stats {
@@ -10,7 +10,6 @@ interface Stats {
   byStatus: Record<string, number>
   clientsByTier: Record<string, number>
   clientsByStatus: Record<string, number>
-  agentHealth: Record<string, { lastRun: string | null; runsToday: number; status: string }>
   recentLeads: any[]
   recentClients: any[]
   proposalsOut: number
@@ -32,16 +31,6 @@ const TIER_COLORS: Record<string, string> = {
 }
 
 const SCORE_COLORS: Record<string, string> = { HOT: '#ef4444', WARM: '#f59e0b', BASIC: '#94a3b8' }
-
-const AGENT_LABELS: Record<string, string> = {
-  'gc-lead-intake': 'Lead Intake',
-  'gc-email-responder': 'Email Responder',
-  'gc-appointment-setter': 'Appointment Setter',
-  'gc-post-call': 'Post-Call',
-  'gc-crm-morning': 'Morning Briefing',
-  'gc-crm-evening': 'Evening Recon',
-  'gc-qa-health': 'QA Health',
-}
 
 const STATUS_LABELS: Record<string, string> = {
   new: 'New',
@@ -150,32 +139,6 @@ export default function Dashboard() {
           ) : (
             <div className="h-[200px] flex items-center justify-center text-slate-500 text-sm">No leads yet</div>
           )}
-        </div>
-      </div>
-
-      {/* Agent Health */}
-      <div className="card p-5">
-        <h3 className="text-sm font-semibold text-slate-200 mb-4">Agent Health</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          {Object.entries(stats.agentHealth).map(([id, info]) => (
-            <div key={id} className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/5">
-              {info.status === 'ok' ? (
-                <CheckCircle size={18} className="text-emerald-400 flex-shrink-0" />
-              ) : info.status === 'stale' ? (
-                <AlertTriangle size={18} className="text-amber-400 flex-shrink-0" />
-              ) : (
-                <XCircle size={18} className="text-slate-500 flex-shrink-0" />
-              )}
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-slate-200 truncate">{AGENT_LABELS[id] || id}</p>
-                <p className="text-xs text-slate-500">
-                  {info.lastRun
-                    ? `${info.runsToday} runs today`
-                    : 'Never run'}
-                </p>
-              </div>
-            </div>
-          ))}
         </div>
       </div>
 
@@ -306,18 +269,6 @@ export default function Dashboard() {
                   </section>
                 )}
 
-                {/* Agent Health */}
-                <section>
-                  <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wide mb-3 border-b border-white/10 pb-1">Agent Health</h3>
-                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
-                    {Object.entries(reportData.stats.agentHealth).map(([id, info]: [string, any]) => (
-                      <div key={id} className="flex items-center gap-2 text-xs p-2 rounded-lg bg-white/5 border border-white/5 text-slate-300">
-                        <span className={`w-2 h-2 rounded-full ${info.status === 'ok' ? 'bg-emerald-500' : info.status === 'stale' ? 'bg-amber-500' : 'bg-slate-500'}`} />
-                        <span>{AGENT_LABELS[id] || id}</span>
-                      </div>
-                    ))}
-                  </div>
-                </section>
               </div>
             )}
           </div>
