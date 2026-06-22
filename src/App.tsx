@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom'
-import { LayoutDashboard, Users, UserCheck, Phone, Activity, FileText, DollarSign } from 'lucide-react'
+import { LayoutDashboard, Users, UserCheck, Phone, Activity, FileText, DollarSign, Mic } from 'lucide-react'
 import Dashboard from './components/Dashboard'
 import Leads from './components/Leads'
 import Clients from './components/Clients'
@@ -7,6 +7,7 @@ import TodayCalls from './components/TodayCalls'
 import ActivityFeed from './components/ActivityFeed'
 import Reports from './components/Reports'
 import Revenue from './components/Revenue'
+import Transcripts from './components/Transcripts'
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -14,6 +15,7 @@ const navItems = [
   { to: '/leads', icon: Users, label: 'Leads' },
   { to: '/clients', icon: UserCheck, label: 'Clients' },
   { to: '/revenue', icon: DollarSign, label: 'Revenue' },
+  { to: '/transcripts', icon: Mic, label: 'Transcripts' },
   { to: '/activity', icon: Activity, label: 'Activity' },
   { to: '/reports', icon: FileText, label: 'Reports' },
 ]
@@ -70,6 +72,7 @@ export default function App() {
             <Route path="/leads" element={<Leads />} />
             <Route path="/clients" element={<Clients />} />
             <Route path="/revenue" element={<Revenue />} />
+            <Route path="/transcripts" element={<Transcripts />} />
             <Route path="/activity" element={<ActivityFeed />} />
             <Route path="/reports" element={<Reports />} />
           </Routes>
