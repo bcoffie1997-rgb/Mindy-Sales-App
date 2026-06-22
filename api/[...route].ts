@@ -361,6 +361,125 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.json({ ok: true, stripePayers: rows.length, upsertedClients: inserted, totalChargesScanned: allCharges.length })
     }
 
+    // GET or POST /api/sync-ghl?key=govcon-seed
+    // Pull contacts + opportunities from GoHighLevel → Supabase leads table
+    if (path === 'sync-ghl') {
+      if ((req.query.key as string) !== 'govcon-seed') return res.status(403).json({ error: 'Forbidden — add ?key=govcon-seed' })
+
+      const GHL_TOKEN = process.env.GHL_API_KEY
+      const GHL_LOCATION = process.env.GHL_LOCATION_ID
+      if (!GHL_TOKEN || !GHL_LOCATION) return res.status(400).json({ error: 'GHL_API_KEY or GHL_LOCATION_ID env vars not set' })
+
+      const ghlHeaders: any = { 'Authorization': `Bearer ${GHL_TOKEN}`, 'Version': '2021-07-28', 'Content-Type': 'application/json' }
+
+      // Fetch all contacts (cursor-paginated, max 100/page)
+      const allContacts: any[] = []
+      let contactsUrl: string | null = `https://services.leadconnectorhq.com/contacts/?locationId=${GHL_LOCATION}&limit=100`
+      while (contactsUrl) {
+        const resp = await fetch(contactsUrl, { headers: ghlHeaders })
+        if (!resp.ok) {
+          const txt = await resp.text()
+          return res.status(502).json({ error: `GHL contacts API error ${resp.status}`, detail: txt.slice(0, 500) })
+        }
+        const json: any = await resp.json()
+        const batch: any[] = json.contacts || []
+        allContacts.push(...batch)
+        contactsUrl = json.meta?.nextPageUrl || null
+        if (!batch.length) break
+      }
+
+      // Fetch all opportunities (page-paginated)
+      const allOpps: any[] = []
+      let oppPage = 1
+      while (true) {
+        const resp = await fetch(`https://services.leadconnectorhq.com/opportunities/search?location_id=${GHL_LOCATION}&limit=100&page=${oppPage}`, { headers: ghlHeaders })
+        if (!resp.ok) break
+        const json: any = await resp.json()
+        const batch: any[] = json.opportunities || []
+        allOpps.push(...batch)
+        if (!batch.length || !json.meta?.nextPageUrl) break
+        oppPage++
+      }
+
+      // Index opportunities by contact id
+      const oppByContact: Record<string, any[]> = {}
+      for (const opp of allOpps) {
+        const cid = opp.contact?.id || opp.contactId
+        if (!cid) continue
+        if (!oppByContact[cid]) oppByContact[cid] = []
+        oppByContact[cid].push(opp)
+      }
+
+      // Load existing Stripe client emails so we don't overwrite them
+      const { data: existingClients } = await supabase.from('leads').select('email').eq('type', 'client')
+      const clientEmails = new Set((existingClients || []).map((c: any) => (c.email || '').toLowerCase()).filter(Boolean))
+
+      // Map GHL contacts → leads rows
+      const rows: any[] = []
+      let skippedClients = 0
+      for (const contact of allContacts) {
+        const email = (contact.email || '').toLowerCase()
+        if (email && clientEmails.has(email)) { skippedClients++; continue }
+
+        // Pick the most-recently-updated opportunity
+        const opps = (oppByContact[contact.id] || []).sort((a: any, b: any) =>
+          new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime()
+        )
+        const opp = opps[0]
+        const stageName = (opp?.stage?.name || '').toLowerCase()
+
+        let score = 'warm', status = 'new'
+        if (stageName.includes('won') || stageName.includes('closed')) { score = 'hot'; status = 'paid' }
+        else if (stageName.includes('proposal') || stageName.includes('offer') || stageName.includes('pricing')) { score = 'hot'; status = 'proposal_sent' }
+        else if (stageName.includes('appointment') || stageName.includes('meeting') || stageName.includes('demo') || stageName.includes('call')) { score = 'hot'; status = 'call_scheduled' }
+        else if (stageName.includes('qualified') || stageName.includes('discovery') || stageName.includes('interest')) { score = 'hot'; status = 'qualified' }
+        else if (stageName.includes('lost') || stageName.includes('disqualified') || stageName.includes('dead')) { score = 'cold'; status = 'dead' }
+
+        const name = [contact.firstName, contact.lastName].filter(Boolean).join(' ') || contact.email || 'Unknown'
+        const tags = (contact.tags || []).join(', ')
+
+        rows.push({
+          id: 'ghl-' + contact.id,
+          type: 'lead',
+          name,
+          email: contact.email || null,
+          phone: contact.phone || null,
+          company: contact.companyName || null,
+          source: contact.source || 'gohighlevel',
+          score,
+          status,
+          first_contact_date: contact.dateAdded ? contact.dateAdded.slice(0, 10) : null,
+          last_action: opp ? `Pipeline: ${opp.name || opp.stage?.name || 'Opportunity'} (${opp.stage?.name || 'Unknown stage'})` : null,
+          last_action_date: opp?.updatedAt || contact.dateUpdated || new Date().toISOString(),
+          notes: tags ? `Tags: ${tags}` : null,
+          metadata: {
+            ghl_id: contact.id,
+            ghl_pipeline: opp?.pipeline?.name || null,
+            ghl_stage: opp?.stage?.name || null,
+            opp_value: opp?.monetaryValue || null,
+            opp_count: opps.length
+          }
+        })
+      }
+
+      // Upsert in batches of 100
+      let upserted = 0
+      for (let i = 0; i < rows.length; i += 100) {
+        const batch = rows.slice(i, i + 100)
+        const { error } = await supabase.from('leads').upsert(batch, { onConflict: 'id' })
+        if (error) return res.status(500).json({ error: error.message, upsertedSoFar: upserted })
+        upserted += batch.length
+      }
+
+      return res.json({
+        ok: true,
+        ghlContactsFound: allContacts.length,
+        ghlOppsFound: allOpps.length,
+        skippedExistingClients: skippedClients,
+        upsertedLeads: upserted
+      })
+    }
+
     res.status(404).json({ error:'Not found', debug: { path, slug, rawRoute, url: req.url } })
   } catch (err:any) {
     console.error(err)
