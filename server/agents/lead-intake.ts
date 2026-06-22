@@ -50,31 +50,7 @@ export const leadIntake: Agent = {
         }
       }
 
-      // 2. Ingest self-booked Calendly invites without lead records
-      if (ctx.calendly.isEnabled()) {
-        const since = new Date(ctx.now.getTime() - 7 * 86400000).toISOString()
-        const until = new Date(ctx.now.getTime() + 7 * 86400000).toISOString()
-        const calEvents = await ctx.calendly.listScheduledEvents(since, until)
-        for (const evt of calEvents) {
-          for (const invitee of evt.invitees) {
-            if (!invitee.email) continue
-            let lead = findLeadByEmail(ctx.dataDir, invitee.email)
-            if (!lead) {
-              lead = createLead(ctx.dataDir, {
-                name: invitee.name || invitee.email.split('@')[0],
-                email: invitee.email,
-                source: 'calendly',
-                status: 'meeting_interest',
-                next_call_date: evt.start_time,
-              })
-              summary.new_leads++
-              events.push(buildEvent(this.id, 'new_lead', { name: lead.name, email: lead.email, source: 'calendly' }, lead.id))
-            }
-          }
-        }
-      }
-
-      // 3. Score all BASIC leads
+      // 2. Score all BASIC leads
       const leads = readMasterSheet(ctx.dataDir)
       for (const lead of leads) {
         if (lead.score && lead.score !== 'BASIC') continue

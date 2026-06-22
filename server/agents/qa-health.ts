@@ -26,14 +26,12 @@ export const qaHealth: Agent = {
       summary.integrations = {
         gmail: ctx.gmail.isEnabled(),
         calendar: ctx.calendar.isEnabled(),
-        calendly: ctx.calendly.isEnabled(),
         fireflies: ctx.fireflies.isEnabled(),
         slack: ctx.slack.isEnabled(),
         stripe: !!config?.stripe?.api_key,
       }
 
       if (!ctx.gmail.isEnabled()) issues.push('Gmail integration not configured')
-      if (!ctx.calendly.isEnabled()) issues.push('Calendly integration not configured')
       if (!ctx.fireflies.isEnabled()) issues.push('Fireflies integration not configured')
 
       // Missing emails
@@ -74,7 +72,6 @@ export const qaHealth: Agent = {
         `## Integration Status`,
         `- Gmail: ${summary.integrations.gmail ? '✅' : '❌'}`,
         `- Google Calendar: ${summary.integrations.calendar ? '✅' : '❌'}`,
-        `- Calendly: ${summary.integrations.calendly ? '✅' : '❌'}`,
         `- Fireflies: ${summary.integrations.fireflies ? '✅' : '❌'}`,
         `- Slack: ${summary.integrations.slack ? '✅' : '❌'}`,
         `- Stripe: ${summary.integrations.stripe ? '✅' : '❌'}`,

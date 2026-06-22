@@ -62,36 +62,6 @@ function buildCallFromCalendar(evt: any, lead: any): any {
   }
 }
 
-function buildCallFromCalendly(evt: any, lead: any): any {
-  return {
-    event_id: evt.id,
-    title: evt.name,
-    start: evt.start_time,
-    end: evt.end_time,
-    location: evt.location || '',
-    status: evt.status,
-    minutes_until: 0,
-    attendees: evt.invitees || [],
-    lead_match: lead ? {
-      id: lead.id,
-      name: lead.name,
-      company: lead.company || '',
-      score: lead.score || 'BASIC',
-      type: lead.type || 'lead',
-      client_tier: lead.client_tier || null,
-      status: lead.status,
-      phone: lead.phone || '',
-      notes: lead.notes || '',
-      problem: lead.problem || '',
-      industry: lead.company_details?.industry || '',
-      revenue: lead.company_details?.revenue || '',
-      total_calls: lead.calendly?.total_calls || 0,
-      source: lead.source || '',
-      recommended_angle: lead.recommended_angle || '',
-    } : null,
-  }
-}
-
 export const appointmentSetter: Agent = {
   id: 'gc-appointment-setter',
   name: 'Appointment Setter',
@@ -134,34 +104,6 @@ export const appointmentSetter: Agent = {
             })
             summary.booked++
             events.push(buildEvent(this.id, 'booking_confirmed', { call_date: evt.start, name: lead.name }, lead.id))
-          }
-        }
-      }
-
-      // Fallback: Calendly if no Google Calendar
-      else if (ctx.calendly.isEnabled()) {
-        const since = new Date(ctx.now.getTime() - 1 * 86400000).toISOString()
-        const until = new Date(ctx.now.getTime() + 14 * 86400000).toISOString()
-        const calEvents = await ctx.calendly.listScheduledEvents(since, until)
-
-        for (const evt of calEvents) {
-          const leadEmail = evt.invitees?.[0]?.email
-          const lead = leadEmail ? findLeadByEmail(ctx.dataDir, leadEmail) : null
-
-          const call = buildCallFromCalendly(evt, lead)
-          const startDate = eventDateStr(evt.start_time, tz)
-          if (startDate === todayStr) freshCalls.today.push(call)
-          else if (startDate === tomorrowStr) freshCalls.tomorrow.push(call)
-          else freshCalls.this_week.push(call)
-
-          if (lead && (lead.status === 'meeting_interest' || lead.status === 'wants_meeting')) {
-            updateLead(ctx.dataDir, lead.id, {
-              status: 'booked',
-              last_action: `Meeting booked for ${evt.start_time}`,
-              next_call_date: evt.start_time,
-            })
-            summary.booked++
-            events.push(buildEvent(this.id, 'booking_confirmed', { call_date: evt.start_time, name: lead.name }, lead.id))
           }
         }
       }

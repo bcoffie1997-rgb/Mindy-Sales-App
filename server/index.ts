@@ -10,7 +10,6 @@ import { loadConfig } from './config.js'
 import { agentSchedules } from './schedules.js'
 import { SlackClient } from './integrations/slack.js'
 import { GmailClient } from './integrations/gmail.js'
-import { CalendlyClient } from './integrations/calendly.js'
 import { GoogleCalendarClient } from './integrations/calendar.js'
 import { FirefliesClient } from './integrations/fireflies.js'
 import type { AgentContext } from './agents/types.js'
@@ -32,7 +31,6 @@ function getAgentContext(): AgentContext {
     timezone: config?.timezone || 'America/New_York',
     slack: new SlackClient(config),
     gmail: new GmailClient(config),
-    calendly: new CalendlyClient(config),
     calendar: new GoogleCalendarClient(config),
     fireflies: new FirefliesClient(config),
   }
@@ -775,7 +773,7 @@ app.get('/api/command-center', (_req, res) => {
         slack: ctx.slack.isEnabled(),
         gmail: ctx.gmail.isEnabled(),
         calendar: ctx.calendar.isEnabled(),
-        calendly: ctx.calendly.isEnabled(),
+
         fireflies: ctx.fireflies.isEnabled(),
         openai: !!ctx.config?.integrations?.openai?.apiKey,
       },

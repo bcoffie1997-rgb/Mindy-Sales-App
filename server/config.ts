@@ -29,9 +29,6 @@ export function loadConfig(dataDir: string) {
       refreshToken: process.env.GMAIL_REFRESH_TOKEN || '',
       serviceAccountJson: process.env.GMAIL_SERVICE_ACCOUNT_JSON || '',
     },
-    calendly: {
-      apiToken: process.env.CALENDLY_API_TOKEN || '',
-    },
     calendar: {
       calendarId: process.env.GOOGLE_CALENDAR_ID || 'primary',
     },

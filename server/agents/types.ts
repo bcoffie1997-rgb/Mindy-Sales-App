@@ -1,6 +1,5 @@
 import type { SlackClient } from '../integrations/slack.js'
 import type { GmailClient } from '../integrations/gmail.js'
-import type { CalendlyClient } from '../integrations/calendly.js'
 import type { GoogleCalendarClient } from '../integrations/calendar.js'
 import type { FirefliesClient } from '../integrations/fireflies.js'
 
@@ -11,7 +10,6 @@ export interface AgentContext {
   timezone: string
   slack: SlackClient
   gmail: GmailClient
-  calendly: CalendlyClient
   calendar: GoogleCalendarClient
   fireflies: FirefliesClient
 }
