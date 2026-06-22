@@ -9,6 +9,6 @@ export default defineConfig({
   },
   server: {
     port: 3002,
-    proxy: { '/api': 'http://localhost:3007' }
+    proxy: { '/api': 'https://mindy-sales-app.vercel.app' }
   }
 })
