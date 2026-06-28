@@ -56,6 +56,23 @@ function matchStripeToLead(email: string, name: string, leads: any[]): any | nul
   return leads.find((l: any) => (e && l.email && l.email.toLowerCase() === e) || (n && l.name && l.name.toLowerCase() === n)) || null
 }
 
+// PostgREST caps a single select at 1000 rows. This range-paginates so we get
+// every row regardless of table size (the leads table now holds ~2k+ rows).
+async function fetchAllRows(table: string, columns = '*', applyFilter?: (q: any) => any): Promise<any[]> {
+  const out: any[] = []
+  const STEP = 1000
+  for (let from = 0; from < 100000; from += STEP) {
+    let q = supabase.from(table).select(columns).range(from, from + STEP - 1)
+    if (applyFilter) q = applyFilter(q)
+    const { data, error } = await q
+    if (error) throw error
+    if (!data || !data.length) break
+    out.push(...data)
+    if (data.length < STEP) break
+  }
+  return out
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,OPTIONS')
@@ -101,11 +118,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     // GET /api/stats
     if (path === 'stats') {
-      const [{ data: all, error }, { data: events }] = await Promise.all([
-        supabase.from('leads').select('*'),
+      const [all, { data: events }] = await Promise.all([
+        fetchAllRows('leads', '*'),
         supabase.from('agent_events').select('agent_name,event_type,ts').eq('event_type','run_summary')
       ])
-      if (error) throw error
       const leads = (all||[]).filter((l:any) => l.type !== 'client')
       const clients = (all||[]).filter((l:any) => l.type === 'client')
       const byScore:Record<string,number> = {}, byStatus:Record<string,number> = {}
@@ -132,22 +148,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // GET /api/leads-only
     if (path === 'leads-only') {
-      const { data, error } = await supabase.from('leads').select('*').neq('type','client').order('created_at',{ascending:false})
-      if (error) throw error
+      const data = await fetchAllRows('leads', '*', (q:any) => q.neq('type','client').order('created_at',{ascending:false}))
       return res.json(data||[])
     }
 
     // GET /api/clients
     if (path === 'clients') {
-      const { data, error } = await supabase.from('leads').select('*').eq('type','client').order('created_at',{ascending:false})
-      if (error) throw error
+      const data = await fetchAllRows('leads', '*', (q:any) => q.eq('type','client').order('created_at',{ascending:false}))
       return res.json(data||[])
     }
 
     // GET /api/leads
     if (path === 'leads' && method === 'GET') {
-      const { data, error } = await supabase.from('leads').select('*').order('created_at',{ascending:false})
-      if (error) throw error
+      const data = await fetchAllRows('leads', '*', (q:any) => q.order('created_at',{ascending:false}))
       return res.json(data||[])
     }
 
@@ -203,7 +216,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const startOfMonth = new Date(now.getFullYear(),now.getMonth(),1)
       const startOfLastMonth = new Date(now.getFullYear(),now.getMonth()-1,1)
       const twelveMonthsAgo = new Date(now.getFullYear(),now.getMonth()-12,1)
-      const [allCharges,{data:allLeads}] = await Promise.all([fetchAllCharges(twelveMonthsAgo),supabase.from('leads').select('id,name,email,type,score,client_tier')])
+      const [allCharges,allLeads] = await Promise.all([fetchAllCharges(twelveMonthsAgo),fetchAllRows('leads','id,name,email,type,score,client_tier')])
       const monthlyRevenue:Record<string,{revenue:number;count:number}> = {}
       for (const c of allCharges) {
         const d = new Date(c.created*1000), key = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')
@@ -229,7 +242,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const stripe = getStripe()
       if (!stripe) return res.json({ enabled:false })
       const now = new Date(), twelveMonthsAgo = new Date(now.getFullYear(),now.getMonth()-12,1)
-      const [allCharges,activeSubs,{data:allLeads}] = await Promise.all([fetchAllCharges(twelveMonthsAgo),stripe.subscriptions.list({limit:100,status:'active'}),supabase.from('leads').select('id,name,email,type,client_tier,client_status')])
+      const [allCharges,activeSubs,allLeads] = await Promise.all([fetchAllCharges(twelveMonthsAgo),stripe.subscriptions.list({limit:100,status:'active'}),fetchAllRows('leads','id,name,email,type,client_tier,client_status')])
       const monthly:Record<string,{revenue:number;count:number}> = {}
       for (const c of allCharges) { const d=new Date(c.created*1000),key=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); if(!monthly[key])monthly[key]={revenue:0,count:0}; monthly[key].revenue+=c.amount/100; monthly[key].count++ }
       let mrr=0; for (const s of activeSubs.data) { const item=s.items.data[0],amount=item?.price?.unit_amount?item.price.unit_amount/100:0,interval=item?.price?.recurring?.interval||'month'; mrr+=interval==='year'?amount/12:amount }
@@ -246,7 +259,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (path === 'subscriptions') {
       const stripe = getStripe()
       if (!stripe) return res.json({ enabled:false })
-      const [{data:allLeads},activeSubs,pastDueSubs] = await Promise.all([supabase.from('leads').select('id,name,email,type,client_tier'),stripe.subscriptions.list({limit:100,status:'active',expand:['data.customer']}),stripe.subscriptions.list({limit:100,status:'past_due',expand:['data.customer']})])
+      const [allLeads,activeSubs,pastDueSubs] = await Promise.all([fetchAllRows('leads','id,name,email,type,client_tier'),stripe.subscriptions.list({limit:100,status:'active',expand:['data.customer']}),stripe.subscriptions.list({limit:100,status:'past_due',expand:['data.customer']})])
       const allSubs=[...activeSubs.data,...pastDueSubs.data]
       const productIds=[...new Set(allSubs.map(s=>s.items.data[0]?.price?.product as string).filter(Boolean))]
       const productNames:Record<string,string> = {}
@@ -274,7 +287,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (path === 'stripe-crossref') {
       if (!getStripe()) return res.json({ enabled:false })
       const now=new Date(),twelveMonthsAgo=new Date(now.getFullYear(),now.getMonth()-12,1)
-      const [allCharges,{data:allLeads}]=await Promise.all([fetchAllCharges(twelveMonthsAgo),supabase.from('leads').select('id,name,email,type,score,status,client_tier')])
+      const [allCharges,allLeads]=await Promise.all([fetchAllCharges(twelveMonthsAgo),fetchAllRows('leads','id,name,email,type,score,status,client_tier')])
       const payers:Record<string,{name:string;email:string;total:number;count:number;lastPayment:string}> = {}
       for (const c of allCharges) { const email=(c.billing_details?.email||c.receipt_email||'').toLowerCase(),name=c.billing_details?.name||'',key=email||name.toLowerCase(); if(!key)continue; if(!payers[key])payers[key]={name,email,total:0,count:0,lastPayment:''}; payers[key].total+=c.amount/100; payers[key].count++; const dt=new Date(c.created*1000).toISOString(); if(dt>payers[key].lastPayment)payers[key].lastPayment=dt; if(name&&!payers[key].name)payers[key].name=name }
       const missingClients:any[]=[],matchedAsLead:any[]=[],matchedAsClient:any[]=[]
@@ -295,7 +308,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (path === 'transactions') {
       if (!getStripe()) return res.json({ enabled:false })
       const now=new Date(),twelveMonthsAgo=new Date(now.getFullYear(),now.getMonth()-12,1)
-      const [allCharges,{data:allLeads}]=await Promise.all([fetchAllCharges(twelveMonthsAgo),supabase.from('leads').select('id,name,email,type,score,client_tier,status')])
+      const [allCharges,allLeads]=await Promise.all([fetchAllCharges(twelveMonthsAgo),fetchAllRows('leads','id,name,email,type,score,client_tier,status')])
       const q=((req.query.q as string)||'').toLowerCase()
       const transactions=allCharges.map((c:any)=>{ const email=c.billing_details?.email||c.receipt_email||'',name=c.billing_details?.name||'',desc=c.description||c.metadata?.memberpress_product||c.metadata?.product||'',match=matchStripeToLead(email,name,allLeads||[]); return {id:c.id,amount:c.amount/100,currency:c.currency,description:desc,customer_email:email,customer_name:name,date:new Date(c.created*1000).toISOString(),client_match:match?{id:match.id,name:match.name,type:match.type,score:match.score,client_tier:match.client_tier,status:match.status}:null,platform:c.metadata?.platform||null} })
       const filtered=q?transactions.filter((t:any)=>t.customer_name.toLowerCase().includes(q)||t.customer_email.toLowerCase().includes(q)||t.description.toLowerCase().includes(q)||(t.client_match?.name||'').toLowerCase().includes(q)):transactions
@@ -542,7 +555,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       // Load existing leads/clients for email matching
-      const { data: allLeads } = await supabase.from('leads').select('id,name,email')
+      const allLeads = await fetchAllRows('leads','id,name,email')
       const leadByEmail: Record<string, any> = {}
       for (const l of (allLeads || [])) { if (l.email) leadByEmail[l.email.toLowerCase()] = l }
 
