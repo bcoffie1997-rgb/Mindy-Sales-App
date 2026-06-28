@@ -361,8 +361,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.json({ ok: true, stripePayers: rows.length, upsertedClients: inserted, totalChargesScanned: allCharges.length })
     }
 
-    // GET or POST /api/sync-ghl?key=govcon-seed
-    // Pull contacts + opportunities from GoHighLevel → Supabase leads table
+    // GET or POST /api/sync-ghl?key=govcon-seed[&page=N][&pages=M]
+    // Opportunity-driven, RESUMABLE lead import from GoHighLevel → Supabase leads table.
+    // The account has ~20k contacts but only ~2k opportunities (the real pipeline), so we
+    // import leads from opportunities. Each call processes a bounded number of opportunity
+    // pages within a ~22s time budget, then returns nextPage so it can be called repeatedly
+    // until done — this keeps every invocation safely under the 30s serverless limit.
     if (path === 'sync-ghl') {
       if ((req.query.key as string) !== 'govcon-seed') return res.status(403).json({ error: 'Forbidden — add ?key=govcon-seed' })
 
@@ -371,112 +375,117 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!GHL_TOKEN || !GHL_LOCATION) return res.status(400).json({ error: 'GHL_API_KEY or GHL_LOCATION_ID env vars not set' })
 
       const ghlHeaders: any = { 'Authorization': `Bearer ${GHL_TOKEN}`, 'Version': '2021-07-28', 'Content-Type': 'application/json' }
+      const startPage = Math.max(1, parseInt(req.query.page as string) || 1)
+      const maxPages = Math.min(30, Math.max(1, parseInt(req.query.pages as string) || 25))
+      const startedAt = Date.now()
+      const TIME_BUDGET_MS = 22000
 
-      // Fetch all contacts (cursor-paginated, max 100/page)
-      const allContacts: any[] = []
-      let contactsUrl: string | null = `https://services.leadconnectorhq.com/contacts/?locationId=${GHL_LOCATION}&limit=100`
-      while (contactsUrl) {
-        const resp = await fetch(contactsUrl, { headers: ghlHeaders })
-        if (!resp.ok) {
-          const txt = await resp.text()
-          return res.status(502).json({ error: `GHL contacts API error ${resp.status}`, detail: txt.slice(0, 500) })
+      // Map pipeline stage IDs → human-readable stage names (one cheap call)
+      const stageNameById: Record<string, string> = {}
+      try {
+        const plResp = await fetch(`https://services.leadconnectorhq.com/opportunities/pipelines?locationId=${GHL_LOCATION}`, { headers: ghlHeaders })
+        if (plResp.ok) {
+          const plJson: any = await plResp.json()
+          for (const p of (plJson.pipelines || []))
+            for (const s of (p.stages || []))
+              stageNameById[s.id] = s.name || ''
         }
-        const json: any = await resp.json()
-        const batch: any[] = json.contacts || []
-        allContacts.push(...batch)
-        contactsUrl = json.meta?.nextPageUrl || null
-        if (!batch.length) break
-      }
+      } catch {}
 
-      // Fetch all opportunities (page-paginated)
-      const allOpps: any[] = []
-      let oppPage = 1
-      while (true) {
-        const resp = await fetch(`https://services.leadconnectorhq.com/opportunities/search?location_id=${GHL_LOCATION}&limit=100&page=${oppPage}`, { headers: ghlHeaders })
-        if (!resp.ok) break
-        const json: any = await resp.json()
-        const batch: any[] = json.opportunities || []
-        allOpps.push(...batch)
-        if (!batch.length || !json.meta?.nextPageUrl) break
-        oppPage++
-      }
-
-      // Index opportunities by contact id
-      const oppByContact: Record<string, any[]> = {}
-      for (const opp of allOpps) {
-        const cid = opp.contact?.id || opp.contactId
-        if (!cid) continue
-        if (!oppByContact[cid]) oppByContact[cid] = []
-        oppByContact[cid].push(opp)
-      }
-
-      // Load existing Stripe client emails so we don't overwrite them
+      // Existing Stripe client emails — never overwrite a paying client with a lead row
       const { data: existingClients } = await supabase.from('leads').select('email').eq('type', 'client')
       const clientEmails = new Set((existingClients || []).map((c: any) => (c.email || '').toLowerCase()).filter(Boolean))
 
-      // Map GHL contacts → leads rows
-      const rows: any[] = []
-      let skippedClients = 0
-      for (const contact of allContacts) {
-        const email = (contact.email || '').toLowerCase()
-        if (email && clientEmails.has(email)) { skippedClients++; continue }
-
-        // Pick the most-recently-updated opportunity
-        const opps = (oppByContact[contact.id] || []).sort((a: any, b: any) =>
-          new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime()
-        )
-        const opp = opps[0]
-        const stageName = (opp?.stage?.name || '').toLowerCase()
-
-        let score = 'warm', status = 'new'
-        if (stageName.includes('won') || stageName.includes('closed')) { score = 'hot'; status = 'paid' }
-        else if (stageName.includes('proposal') || stageName.includes('offer') || stageName.includes('pricing')) { score = 'hot'; status = 'proposal_sent' }
-        else if (stageName.includes('appointment') || stageName.includes('meeting') || stageName.includes('demo') || stageName.includes('call')) { score = 'hot'; status = 'call_scheduled' }
-        else if (stageName.includes('qualified') || stageName.includes('discovery') || stageName.includes('interest')) { score = 'hot'; status = 'qualified' }
-        else if (stageName.includes('lost') || stageName.includes('disqualified') || stageName.includes('dead')) { score = 'cold'; status = 'dead' }
-
-        const name = [contact.firstName, contact.lastName].filter(Boolean).join(' ') || contact.email || 'Unknown'
-        const tags = (contact.tags || []).join(', ')
-
-        rows.push({
-          id: 'ghl-' + contact.id,
-          type: 'lead',
-          name,
-          email: contact.email || null,
-          phone: contact.phone || null,
-          company: contact.companyName || null,
-          source: contact.source || 'gohighlevel',
-          score,
-          status,
-          first_contact_date: contact.dateAdded ? contact.dateAdded.slice(0, 10) : null,
-          last_action: opp ? `Pipeline: ${opp.name || opp.stage?.name || 'Opportunity'} (${opp.stage?.name || 'Unknown stage'})` : null,
-          last_action_date: opp?.updatedAt || contact.dateUpdated || new Date().toISOString(),
-          notes: tags ? `Tags: ${tags}` : null,
-          metadata: {
-            ghl_id: contact.id,
-            ghl_pipeline: opp?.pipeline?.name || null,
-            ghl_stage: opp?.stage?.name || null,
-            opp_value: opp?.monetaryValue || null,
-            opp_count: opps.length
-          }
-        })
+      function scoreFor(stage: string) {
+        const s = stage.toLowerCase()
+        if (s.includes('sold') || s.includes('won') || s.includes('closed')) return { score: 'hot', status: 'paid' }
+        if (s.includes('proposal') || s.includes('contract') || s.includes('payment') || s.includes('closing')) return { score: 'hot', status: 'proposal_sent' }
+        if (s.includes('missed')) return { score: 'warm', status: 'no_show' }
+        if (s.includes('meeting') || s.includes('call') || s.includes('schedule') || s.includes('webinar') || s.includes('bid')) return { score: 'hot', status: 'call_scheduled' }
+        if (s.includes('follow')) return { score: 'warm', status: 'follow_up' }
+        if (s.includes('lost') || s.includes('dead') || s.includes('disqualified')) return { score: 'cold', status: 'dead' }
+        return { score: 'warm', status: 'new' }
       }
 
-      // Upsert in batches of 100
-      let upserted = 0
-      for (let i = 0; i < rows.length; i += 100) {
-        const batch = rows.slice(i, i + 100)
-        const { error } = await supabase.from('leads').upsert(batch, { onConflict: 'id' })
-        if (error) return res.status(500).json({ error: error.message, upsertedSoFar: upserted })
-        upserted += batch.length
+      let page = startPage
+      let oppsScanned = 0, upserted = 0, skippedClients = 0
+      let totalOpps: number | null = null
+      let done = false
+
+      while (page < startPage + maxPages) {
+        if (Date.now() - startedAt > TIME_BUDGET_MS) break
+        const resp = await fetch(`https://services.leadconnectorhq.com/opportunities/search?location_id=${GHL_LOCATION}&limit=100&page=${page}`, { headers: ghlHeaders })
+        if (!resp.ok) {
+          const txt = await resp.text()
+          return res.status(502).json({ error: `GHL opportunities API error ${resp.status}`, detail: txt.slice(0, 400), nextPage: page })
+        }
+        const json: any = await resp.json()
+        if (totalOpps === null) totalOpps = json.meta?.total ?? null
+        const batch: any[] = json.opportunities || []
+        if (!batch.length) { done = true; break }
+
+        const rows: any[] = []
+        for (const opp of batch) {
+          const contact = opp.contact || {}
+          const cid = contact.id || opp.contactId
+          if (!cid) continue
+          const email = (contact.email || '').toLowerCase()
+          if (email && clientEmails.has(email)) { skippedClients++; continue }
+
+          const stage = stageNameById[opp.pipelineStageId] || ''
+          const { score, status } = scoreFor(stage)
+          const name = contact.name || [contact.firstName, contact.lastName].filter(Boolean).join(' ') || contact.email || opp.name || 'Unknown'
+          const tags = (contact.tags || []).join(', ')
+
+          rows.push({
+            id: 'ghl-' + cid,
+            type: 'lead',
+            name,
+            email: contact.email || null,
+            phone: contact.phone || null,
+            company: contact.companyName || null,
+            source: opp.source || 'gohighlevel',
+            score,
+            status,
+            first_contact_date: opp.createdAt ? opp.createdAt.slice(0, 10) : null,
+            last_action: `Pipeline: ${opp.name || 'Opportunity'}${stage ? ' (' + stage + ')' : ''}`,
+            last_action_date: opp.updatedAt || opp.lastStageChangeAt || new Date().toISOString(),
+            notes: tags ? `Tags: ${tags}` : null,
+            metadata: {
+              ghl_id: cid,
+              ghl_opp_id: opp.id,
+              ghl_stage: stage || null,
+              opp_value: opp.monetaryValue ?? null,
+              opp_status: opp.status || null
+            }
+          })
+        }
+
+        if (rows.length) {
+          const { error } = await supabase.from('leads').upsert(rows, { onConflict: 'id' })
+          if (error) return res.status(500).json({ error: error.message, upsertedSoFar: upserted, nextPage: page })
+          upserted += rows.length
+        }
+        oppsScanned += batch.length
+
+        // Stop when the API signals there are no further pages
+        if (batch.length < 100 || !json.meta?.nextPage) { done = true; break }
+        page++
       }
 
       return res.json({
         ok: true,
-        ghlContactsFound: allContacts.length,
-        ghlOppsFound: allOpps.length,
+        done,
+        totalOpps,
+        startPage,
+        lastProcessedPage: done ? page : page - 1,
+        nextPage: done ? null : page,
+        oppsScannedThisCall: oppsScanned,
+        upsertedThisCall: upserted,
         skippedExistingClients: skippedClients,
-        upsertedLeads: upserted
+        hint: done
+          ? 'Sync complete 🎉'
+          : `Not finished — call again with ?key=govcon-seed&page=${page}`
       })
     }
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Search, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react'
+import { Search, ChevronDown, ChevronUp, ExternalLink, RefreshCw } from 'lucide-react'
 
 interface Lead {
   id: string
@@ -42,10 +42,37 @@ export default function Leads() {
   const [sortKey, setSortKey] = useState<SortKey>('last_action_date')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [editing, setEditing] = useState<string | null>(null)
+  const [syncing, setSyncing] = useState(false)
+  const [syncMsg, setSyncMsg] = useState('')
 
   const load = () => fetch('/api/leads-only').then(r => r.json()).then(setLeads).catch(() => {})
 
   useEffect(() => { load() }, [])
+
+  // Resumable GHL import: keep calling the endpoint, advancing pages, until done.
+  async function runSync() {
+    setSyncing(true)
+    setSyncMsg('Starting GoHighLevel sync…')
+    let page = 1
+    let totalUpserted = 0
+    try {
+      for (let guard = 0; guard < 50; guard++) {
+        const res = await fetch(`/api/sync-ghl?key=govcon-seed&page=${page}`)
+        const json = await res.json()
+        if (!json.ok) { setSyncMsg('Sync error: ' + (json.error || JSON.stringify(json))); break }
+        totalUpserted += json.upsertedThisCall || 0
+        const total = json.totalOpps ? ` of ~${json.totalOpps}` : ''
+        setSyncMsg(`Imported ${totalUpserted}${total} pipeline leads…`)
+        await load()
+        if (json.done || !json.nextPage) { setSyncMsg(`✅ Done — ${totalUpserted} leads imported from GoHighLevel`); break }
+        page = json.nextPage
+      }
+    } catch (e: any) {
+      setSyncMsg('Sync failed: ' + (e?.message || String(e)))
+    } finally {
+      setSyncing(false)
+    }
+  }
 
   const filtered = leads
     .filter(l => {
@@ -91,7 +118,18 @@ export default function Leads() {
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-2xl font-bold text-white">Leads</h2>
-        <span className="text-sm text-slate-500">{filtered.length} leads</span>
+        <div className="flex items-center gap-3">
+          {syncMsg && <span className="text-xs text-slate-400">{syncMsg}</span>}
+          <span className="text-sm text-slate-500">{filtered.length} leads</span>
+          <button
+            onClick={runSync}
+            disabled={syncing}
+            className="btn-primary flex items-center gap-2 text-sm px-4 py-2 disabled:opacity-50"
+          >
+            <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
+            {syncing ? 'Syncing…' : 'Sync from GoHighLevel'}
+          </button>
+        </div>
       </div>
 
       {/* Filters */}
