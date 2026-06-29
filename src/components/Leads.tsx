@@ -34,6 +34,17 @@ const STATUS_COLORS: Record<string, string> = {
   paid: 'badge-green',
 }
 
+const SCORE_CLASSES: Record<string, string> = {
+  HOT: 'bg-red-500/20 text-red-300',
+  WARM: 'bg-amber-500/20 text-amber-300',
+  BASIC: 'bg-white/10 text-slate-400',
+}
+
+function fmtDate(iso: string) {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
 export default function Leads() {
   const [leads, setLeads] = useState<Lead[]>([])
   const [search, setSearch] = useState('')
@@ -49,7 +60,6 @@ export default function Leads() {
 
   useEffect(() => { load() }, [])
 
-  // Resumable GHL import: keep calling the endpoint, advancing pages, until done.
   async function runSync() {
     setSyncing(true)
     setSyncMsg('Starting GoHighLevel sync…')
@@ -115,26 +125,29 @@ export default function Leads() {
   const scores = [...new Set(leads.map(l => l.score))].sort()
 
   return (
-    <div className="p-6 space-y-4">
-      <div className="flex items-center justify-between">
+    <div className="p-4 sm:p-6 space-y-4">
+      {/* Header */}
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <h2 className="text-2xl font-bold text-white">Leads</h2>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
           {syncMsg && <span className="text-xs text-slate-400">{syncMsg}</span>}
-          <span className="text-sm text-slate-500">{filtered.length} leads</span>
-          <button
-            onClick={runSync}
-            disabled={syncing}
-            className="btn-primary flex items-center gap-2 text-sm px-4 py-2 disabled:opacity-50"
-          >
-            <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
-            {syncing ? 'Syncing…' : 'Sync from GoHighLevel'}
-          </button>
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-slate-500">{filtered.length} leads</span>
+            <button
+              onClick={runSync}
+              disabled={syncing}
+              className="btn-primary flex items-center gap-2 text-sm px-4 py-2 disabled:opacity-50"
+            >
+              <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
+              {syncing ? 'Syncing…' : 'Sync GHL'}
+            </button>
+          </div>
         </div>
       </div>
 
       {/* Filters */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 min-w-[200px] max-w-md">
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
+        <div className="relative flex-1 min-w-0 sm:min-w-[200px] sm:max-w-md">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
           <input
             type="text"
@@ -144,18 +157,76 @@ export default function Leads() {
             className="input-dark w-full pl-9 pr-3"
           />
         </div>
-        <select value={scoreFilter} onChange={e => setScoreFilter(e.target.value)} className="input-dark">
-          <option value="all" className="bg-slate-900">All Scores</option>
-          {scores.map(s => <option key={s} value={s} className="bg-slate-900">{s}</option>)}
-        </select>
-        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="input-dark">
-          <option value="all" className="bg-slate-900">All Statuses</option>
-          {statuses.map(s => <option key={s} value={s} className="bg-slate-900">{s}</option>)}
-        </select>
+        <div className="flex gap-2">
+          <select value={scoreFilter} onChange={e => setScoreFilter(e.target.value)} className="input-dark flex-1 sm:flex-none">
+            <option value="all" className="bg-slate-900">All Scores</option>
+            {scores.map(s => <option key={s} value={s} className="bg-slate-900">{s}</option>)}
+          </select>
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="input-dark flex-1 sm:flex-none">
+            <option value="all" className="bg-slate-900">All Statuses</option>
+            {statuses.map(s => <option key={s} value={s} className="bg-slate-900">{s}</option>)}
+          </select>
+        </div>
       </div>
 
-      {/* Table */}
-      <div className="card overflow-x-auto">
+      {/* Mobile card list */}
+      <div className="md:hidden space-y-2">
+        {filtered.length === 0 ? (
+          <div className="card p-8 text-center text-slate-500">No leads found</div>
+        ) : (
+          filtered.map(lead => (
+            <div key={lead.id} className="card p-4 space-y-2">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="font-semibold text-slate-100 truncate">{lead.name}</p>
+                  <p className="text-xs text-slate-500 truncate">{lead.company || lead.email || '—'}</p>
+                </div>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  {editing === lead.id ? (
+                    <select
+                      defaultValue={lead.score}
+                      onChange={e => updateLead(lead.id, { score: e.target.value })}
+                      className="input-dark text-xs py-0.5 px-1.5"
+                      autoFocus
+                      onBlur={() => setEditing(null)}
+                    >
+                      <option value="HOT">HOT</option>
+                      <option value="WARM">WARM</option>
+                      <option value="BASIC">BASIC</option>
+                    </select>
+                  ) : (
+                    <span
+                      onClick={() => setEditing(lead.id)}
+                      className={`text-xs font-semibold px-2 py-0.5 rounded-full cursor-pointer ${SCORE_CLASSES[lead.score] || 'bg-white/10 text-slate-400'}`}
+                    >{lead.score}</span>
+                  )}
+                  <span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_COLORS[lead.status] || 'bg-white/10 text-slate-400'}`}>
+                    {lead.status?.replace(/_/g, ' ')}
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 text-xs text-slate-500 flex-wrap">
+                {lead.last_action && <span className="text-slate-400">{lead.last_action}</span>}
+                {lead.last_action && <span>·</span>}
+                <span>{fmtDate(lead.last_action_date)}</span>
+                <span>·</span>
+                <span>{lead.follow_up_count ?? 0} follow-ups</span>
+                {lead.notes && (
+                  <>
+                    <span>·</span>
+                    <span title={lead.notes} className="text-purple-400 cursor-help">
+                      <ExternalLink size={11} />
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Desktop table */}
+      <div className="hidden md:block card overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-white/10">
@@ -205,11 +276,7 @@ export default function Leads() {
                     ) : (
                       <span
                         onClick={() => setEditing(lead.id)}
-                        className={`text-xs font-semibold px-2 py-0.5 rounded-full cursor-pointer ${
-                          lead.score === 'HOT' ? 'bg-red-500/20 text-red-300' :
-                          lead.score === 'WARM' ? 'bg-amber-500/20 text-amber-300' :
-                          'bg-white/10 text-slate-400'
-                        }`}
+                        className={`text-xs font-semibold px-2 py-0.5 rounded-full cursor-pointer ${SCORE_CLASSES[lead.score] || 'bg-white/10 text-slate-400'}`}
                       >{lead.score}</span>
                     )}
                   </td>

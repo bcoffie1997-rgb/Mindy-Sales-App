@@ -81,11 +81,11 @@ export default function ActivityFeed() {
   useEffect(() => { load() }, [hours])
 
   return (
-    <div className="p-6 space-y-4">
-      <div className="flex items-center justify-between">
+    <div className="p-4 sm:p-6 space-y-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h2 className="text-2xl font-bold text-white">Agent Activity</h2>
-        <div className="flex items-center gap-3">
-          <select value={hours} onChange={e => setHours(Number(e.target.value))} className="input-dark">
+        <div className="flex items-center gap-2 self-start sm:self-auto">
+          <select value={hours} onChange={e => setHours(Number(e.target.value))} className="input-dark flex-1 sm:flex-none">
             <option value={4} className="bg-slate-900">Last 4 hours</option>
             <option value={12} className="bg-slate-900">Last 12 hours</option>
             <option value={24} className="bg-slate-900">Last 24 hours</option>
