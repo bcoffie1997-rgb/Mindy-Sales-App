@@ -84,9 +84,9 @@ export default function Transcripts() {
   const matched = transcripts.filter(t => t.matched_lead_id).length
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-xl font-bold text-white flex items-center gap-2">
             <Mic size={20} className="text-purple-400" /> Call Transcripts
@@ -99,7 +99,7 @@ export default function Transcripts() {
         <button
           onClick={runSync}
           disabled={syncing}
-          className="btn-primary flex items-center gap-2 text-sm px-4 py-2"
+          className="btn-primary flex items-center gap-2 text-sm px-4 py-2 self-start sm:self-auto"
         >
           <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
           {syncing ? 'Syncing…' : 'Sync from Fireflies'}

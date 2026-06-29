@@ -184,14 +184,14 @@ export default function Revenue() {
   }))
 
   return (
-    <div className="p-6 space-y-6 max-w-[1200px]">
+    <div className="p-4 sm:p-6 space-y-4 sm:space-y-6 max-w-[1200px]">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-2xl font-bold text-white">Revenue</h2>
           <p className="text-sm text-slate-400 mt-0.5">Stripe & subscription intelligence</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
           <button onClick={loadReport} className="btn-primary">
             <FileText className="w-4 h-4" /> Executive Report
           </button>
@@ -202,7 +202,7 @@ export default function Revenue() {
       </div>
 
       {/* Metric Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
         <MetricCard icon={DollarSign} label="This Month" value={fmt(revenue.thisMonth)} color="green"
           sub={mom !== null ? <span className={`flex items-center gap-0.5 text-xs ${momPositive ? 'text-emerald-400' : 'text-red-400'}`}>
             {momPositive ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />} {momPositive ? '+' : ''}{revenue.monthOverMonth}%
@@ -338,12 +338,12 @@ export default function Revenue() {
 
       {/* Transaction Search */}
       <div className="card p-5">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
           <div>
             <h3 className="text-sm font-semibold text-slate-200">Transaction History</h3>
             <p className="text-xs text-slate-500">Search all {revenue.totalCharges} transactions from the past year</p>
           </div>
-          <button onClick={loadCrossRef} className="btn-secondary text-xs">
+          <button onClick={loadCrossRef} className="btn-secondary text-xs self-start sm:self-auto">
             <Users className="w-3 h-3" /> Cross-Reference Clients
           </button>
         </div>
@@ -415,7 +415,7 @@ export default function Revenue() {
             ) : (
               <div className="p-6 space-y-6">
                 {/* Summary */}
-                <div className="grid grid-cols-4 gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   <div className="bg-white/5 rounded-xl p-3 text-center border border-white/5">
                     <p className="text-2xl font-bold text-white">{crossRef.summary?.totalPayers || 0}</p>
                     <p className="text-[11px] text-slate-500">Total Payers</p>

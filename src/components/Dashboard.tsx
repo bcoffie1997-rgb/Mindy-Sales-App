@@ -92,13 +92,13 @@ export default function Dashboard() {
     .sort((a, b) => b.value - a.value)
 
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-2xl font-bold text-white">Sales Dashboard</h2>
           <p className="text-sm text-slate-400 mt-0.5">Real-time pipeline intelligence</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
           <button onClick={generateFullReport} className="btn-primary">
             <FileText size={14} /> Full Report
           </button>
@@ -107,7 +107,7 @@ export default function Dashboard() {
       </div>
 
       {/* Metric Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
         <MetricCard icon={Users} label="Active Leads" value={stats.totalLeads || stats.total} color="blue" />
         <MetricCard icon={Flame} label="HOT Leads" value={stats.byScore.HOT || 0} color="red" />
         <MetricCard icon={Phone} label="Calls Booked" value={stats.byStatus.booked || 0} color="green" />

@@ -50,12 +50,12 @@ export default function Reports() {
   }
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="p-4 sm:p-6 space-y-4">
       <h2 className="text-2xl font-bold text-white">Reports</h2>
 
-      <div className="flex gap-6">
+      <div className="flex flex-col gap-4 md:flex-row md:gap-6">
         {/* Report List */}
-        <div className="w-72 flex-shrink-0 space-y-4">
+        <div className="md:w-72 md:flex-shrink-0 space-y-4">
           {/* Daily */}
           <div className="card">
             <h3 className="px-4 py-3 text-sm font-semibold text-slate-200 border-b border-white/10 flex items-center gap-2">
@@ -108,7 +108,7 @@ export default function Reports() {
         </div>
 
         {/* Report Content */}
-        <div className="flex-1 card">
+        <div className="flex-1 card min-h-[300px]">
           {loading ? (
             <div className="p-12 text-center text-slate-400">Loading report...</div>
           ) : activeReport ? (

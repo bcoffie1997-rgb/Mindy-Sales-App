@@ -218,15 +218,15 @@ export default function TodayCalls() {
   }
 
   return (
-    <div className="p-6 space-y-4">
-      <div className="flex items-center justify-between">
+    <div className="p-4 sm:p-6 space-y-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
           <h2 className="text-2xl font-bold text-white">Calls</h2>
           {upcomingToday > 0 && (
             <span className="badge-purple">{upcomingToday} today</span>
           )}
         </div>
-        <div className="flex items-center gap-1 bg-white/5 rounded-xl p-0.5 border border-white/10">
+        <div className="flex items-center gap-1 bg-white/5 rounded-xl p-0.5 border border-white/10 self-start sm:self-auto">
           {(['today', 'tomorrow', 'week'] as const).map(v => (
             <button
               key={v}
