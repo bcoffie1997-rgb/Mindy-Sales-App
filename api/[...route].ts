@@ -598,6 +598,181 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       })
     }
 
+    // GET /api/client?id=xxx — single client with payments + calls + transcripts
+    if (path === 'client' && method === 'GET') {
+      const id = req.query.id as string
+      if (!id) return res.status(400).json({ error: 'id required' })
+      const { data: client, error } = await supabase.from('leads').select('*').eq('id', id).single()
+      if (error || !client) return res.json({ client: null })
+
+      // Stripe payments for this client
+      let payments: Record<string, number> = {}
+      const stripe = getStripe()
+      if (stripe && client.email) {
+        try {
+          const customers = await stripe.customers.list({ email: client.email, limit: 5 })
+          const custId = customers.data[0]?.id
+          if (custId) {
+            const now = new Date()
+            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
+            const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+            const charges = await stripe.charges.list({ customer: custId, limit: 200 })
+            const succeeded = charges.data.filter((c: any) => c.status === 'succeeded')
+            payments.lifetime = succeeded.reduce((s: number, c: any) => s + c.amount / 100, 0)
+            payments.thisMonth = succeeded.filter((c: any) => c.created * 1000 >= startOfMonth.getTime()).reduce((s: number, c: any) => s + c.amount / 100, 0)
+            payments.lastMonth = succeeded.filter((c: any) => c.created * 1000 >= startOfLastMonth.getTime() && c.created * 1000 < startOfMonth.getTime()).reduce((s: number, c: any) => s + c.amount / 100, 0)
+          }
+        } catch (_) { /* stripe not available */ }
+      }
+
+      // Transcripts matched to this client
+      const { data: transcripts } = await supabase.from('transcripts').select('id,title,meeting_date,short_summary,overview').eq('matched_lead_id', id).order('meeting_date', { ascending: false }).limit(10)
+
+      // Calls (upcoming/past from agent_events if available)
+      let calls = { upcoming: [], past: [] }
+
+      return res.json({ client, payments, transcripts: transcripts || [], calls })
+    }
+
+    // GET /api/command-center — live health check of all connected systems
+    if (path === 'command-center' && method === 'GET') {
+      const checkedAt = new Date().toISOString()
+      const systems: any[] = []
+
+      // Supabase / Database
+      try {
+        const { count, error } = await supabase.from('leads').select('*', { count: 'exact', head: true })
+        systems.push({ key: 'database', name: 'Database', vendor: 'Supabase', status: error ? 'degraded' : 'operational', metric: error ? null : `${count} rows`, lastChecked: checkedAt })
+      } catch {
+        systems.push({ key: 'database', name: 'Database', vendor: 'Supabase', status: 'down', lastChecked: checkedAt })
+      }
+
+      // Stripe
+      const stripeKey = process.env.STRIPE_SECRET_KEY
+      if (stripeKey) {
+        try {
+          const stripe = getStripe()
+          await stripe!.customers.list({ limit: 1 })
+          systems.push({ key: 'stripe', name: 'Payments', vendor: 'Stripe', status: 'operational', lastChecked: checkedAt })
+        } catch {
+          systems.push({ key: 'stripe', name: 'Payments', vendor: 'Stripe', status: 'degraded', lastChecked: checkedAt })
+        }
+      } else {
+        systems.push({ key: 'stripe', name: 'Payments', vendor: 'Stripe', status: 'not_configured', lastChecked: checkedAt })
+      }
+
+      // Wave
+      const waveKey = process.env.WAVE_API_TOKEN
+      if (waveKey) {
+        try {
+          const wRes = await fetch('https://gql.waveapps.com/graphql/public', { method: 'POST', headers: { 'Authorization': `Bearer ${waveKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ query: '{ user { defaultEmail } }' }) })
+          systems.push({ key: 'wave', name: 'Accounting', vendor: 'Wave', status: wRes.ok ? 'operational' : 'degraded', lastChecked: checkedAt })
+        } catch {
+          systems.push({ key: 'wave', name: 'Accounting', vendor: 'Wave', status: 'degraded', lastChecked: checkedAt })
+        }
+      } else {
+        systems.push({ key: 'wave', name: 'Accounting', vendor: 'Wave', status: 'not_configured', lastChecked: checkedAt })
+      }
+
+      // GoHighLevel
+      const ghlKey = process.env.GHL_API_KEY
+      if (ghlKey) {
+        try {
+          const gRes = await fetch('https://services.leadconnectorhq.com/opportunities/?locationId=&limit=1', { headers: { 'Authorization': `Bearer ${ghlKey}`, 'Version': '2021-07-28' } })
+          systems.push({ key: 'ghl', name: 'CRM', vendor: 'GoHighLevel', status: gRes.status < 500 ? 'operational' : 'degraded', lastChecked: checkedAt })
+        } catch {
+          systems.push({ key: 'ghl', name: 'CRM', vendor: 'GoHighLevel', status: 'degraded', lastChecked: checkedAt })
+        }
+      } else {
+        systems.push({ key: 'ghl', name: 'CRM', vendor: 'GoHighLevel', status: 'not_configured', lastChecked: checkedAt })
+      }
+
+      // Fireflies
+      const ffKey = process.env.FIREFLIES_API_KEY
+      if (ffKey) {
+        try {
+          const ffRes = await fetch('https://api.fireflies.ai/graphql', { method: 'POST', headers: { 'Authorization': `Bearer ${ffKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ query: '{ user { email } }' }) })
+          const ffJson: any = await ffRes.json()
+          systems.push({ key: 'fireflies', name: 'Call Notes', vendor: 'Fireflies', status: ffRes.ok && !ffJson.errors ? 'operational' : 'degraded', lastChecked: checkedAt })
+        } catch {
+          systems.push({ key: 'fireflies', name: 'Call Notes', vendor: 'Fireflies', status: 'degraded', lastChecked: checkedAt })
+        }
+      } else {
+        systems.push({ key: 'fireflies', name: 'Call Notes', vendor: 'Fireflies', status: 'not_configured', lastChecked: checkedAt })
+      }
+
+      // Calendar (Google — check via agent_events table)
+      try {
+        const { count } = await supabase.from('agent_events').select('*', { count: 'exact', head: true })
+        systems.push({ key: 'calendar', name: 'Calendar', vendor: 'Google Calendar', status: 'operational', metric: count ? `${count} events` : null, lastChecked: checkedAt })
+      } catch {
+        systems.push({ key: 'calendar', name: 'Calendar', vendor: 'Google Calendar', status: 'not_configured', lastChecked: checkedAt })
+      }
+
+      const operational = systems.filter(s => s.status === 'operational').length
+      const overall = systems.every(s => s.status === 'operational' || s.status === 'not_configured')
+        ? 'operational'
+        : systems.some(s => s.status === 'down')
+        ? 'down'
+        : 'degraded'
+
+      return res.json({ overall, operational, total: systems.length, checkedAt, systems })
+    }
+
+    // GET /api/wave — Wave accounting summary
+    if (path === 'wave' && method === 'GET') {
+      const waveToken = process.env.WAVE_API_TOKEN
+      const waveBusinessId = process.env.WAVE_BUSINESS_ID
+      if (!waveToken || !waveBusinessId) return res.json({ enabled: false })
+      try {
+        const query = `query($businessId: ID!, $dateStart: Date!, $dateEnd: Date!, $lastStart: Date!, $lastEnd: Date!) {
+          business(id: $businessId) {
+            reports {
+              profitAndLoss(dateRangeStart: $dateStart, dateRangeEnd: $dateEnd) { income { total { raw } } }
+              lastMonth: profitAndLoss(dateRangeStart: $lastStart, dateRangeEnd: $lastEnd) { income { total { raw } } }
+            }
+          }
+        }`
+        const now = new Date()
+        const y = now.getFullYear(), m = now.getMonth() + 1
+        const dateStart = `${y}-${String(m).padStart(2,'0')}-01`
+        const dateEnd = now.toISOString().split('T')[0]
+        const lastM = m === 1 ? 12 : m - 1, lastY = m === 1 ? y - 1 : y
+        const lastStart = `${lastY}-${String(lastM).padStart(2,'0')}-01`
+        const lastEnd = `${y}-${String(m).padStart(2,'0')}-01`
+        const wRes = await fetch('https://gql.waveapps.com/graphql/public', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${waveToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query, variables: { businessId: waveBusinessId, dateStart, dateEnd, lastStart, lastEnd } })
+        })
+        const wJson: any = await wRes.json()
+        if (wJson.errors) return res.json({ enabled: true, error: wJson.errors[0]?.message })
+        const biz = wJson.data?.business
+        return res.json({
+          enabled: true,
+          thisMonth: biz?.reports?.profitAndLoss?.income?.total?.raw || 0,
+          lastMonth: biz?.reports?.lastMonth?.income?.total?.raw || 0,
+        })
+      } catch (err: any) {
+        return res.json({ enabled: true, error: err.message })
+      }
+    }
+
+    // GET /api/revenue-series — monthly revenue series for charts
+    if (path === 'revenue-series' && method === 'GET') {
+      const months = Number(req.query.months) || 6
+      const since = new Date(); since.setMonth(since.getMonth() - months)
+      const charges = await fetchAllCharges(since)
+      const series: Record<string, number> = {}
+      for (const c of charges) {
+        const d = new Date(c.created * 1000)
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+        series[key] = (series[key] || 0) + c.amount / 100
+      }
+      const result = Object.entries(series).sort(([a], [b]) => a.localeCompare(b)).map(([month, revenue]) => ({ month, revenue }))
+      return res.json(result)
+    }
+
     res.status(404).json({ error:'Not found', debug: { path, slug, rawRoute, url: req.url } })
   } catch (err:any) {
     console.error(err)

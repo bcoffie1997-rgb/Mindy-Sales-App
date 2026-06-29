@@ -1,29 +1,37 @@
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom'
-import { LayoutDashboard, Users, UserCheck, Phone, Activity, FileText, DollarSign, Mic, Menu, X } from 'lucide-react'
+import { LayoutDashboard, Users, UserCheck, Phone, Mic, Building2, Target, Bot, Menu, X, Terminal } from 'lucide-react'
 import { useState } from 'react'
 import Dashboard from './components/Dashboard'
+import BDManagement from './components/BDManagement'
+import ClientsRevenue from './components/ClientsRevenue'
 import Leads from './components/Leads'
-import Clients from './components/Clients'
-import TodayCalls from './components/TodayCalls'
-import ActivityFeed from './components/ActivityFeed'
-import Reports from './components/Reports'
-import Revenue from './components/Revenue'
-import Transcripts from './components/Transcripts'
+import Enterprise from './components/Enterprise'
+import MindyCC from './components/MindyCC'
+import Calls from './components/Calls'
+import Fireflies from './components/Fireflies'
+import CommandCenter from './components/CommandCenter'
+import DetailView from './components/DetailView'
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/calls', icon: Phone, label: 'Calls' },
+  { to: '/manage', icon: Building2, label: 'BD / Consulting' },
+  { to: '/clients', icon: UserCheck, label: 'Clients / Revenue' },
   { to: '/leads', icon: Users, label: 'Leads' },
-  { to: '/clients', icon: UserCheck, label: 'Clients' },
-  { to: '/revenue', icon: DollarSign, label: 'Revenue' },
-  { to: '/transcripts', icon: Mic, label: 'Transcripts' },
-  { to: '/activity', icon: Activity, label: 'Activity' },
-  { to: '/reports', icon: FileText, label: 'Reports' },
+  { to: '/enterprise', icon: Target, label: 'Enterprise Leads' },
+  { to: '/mindy-cc', icon: Bot, label: 'Mindy Command Center' },
+  { to: '/calls', icon: Phone, label: 'Scheduled Calls' },
+  { to: '/fireflies', icon: Mic, label: 'Fireflies Notes' },
 ]
 
-// Show first 5 nav items in the bottom bar; the rest go in a "More" drawer
 const bottomNavItems = navItems.slice(0, 5)
 const drawerNavItems = navItems.slice(5)
+
+const navClass = ({ isActive }: { isActive: boolean }) =>
+  `flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+    isActive
+      ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/20'
+      : 'text-slate-400 hover:bg-white/5 hover:text-white'
+  }`
 
 export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -40,34 +48,23 @@ export default function App() {
               </div>
               <div>
                 <h1 className="text-base font-bold text-white">GovCon Sales</h1>
-                <p className="text-slate-400 text-xs">AI Team Dashboard</p>
+                <p className="text-slate-400 text-xs">Sales Dashboard</p>
               </div>
             </div>
           </div>
           <nav className="flex-1 p-3 space-y-1">
             {navItems.map(({ to, icon: Icon, label }) => (
-              <NavLink
-                key={to}
-                to={to}
-                end={to === '/'}
-                className={({ isActive }) =>
-                  `flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                    isActive
-                      ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/20'
-                      : 'text-slate-400 hover:bg-white/5 hover:text-white'
-                  }`
-                }
-              >
+              <NavLink key={to} to={to} end={to === '/'} className={navClass}>
                 <Icon size={18} />
                 {label}
               </NavLink>
             ))}
           </nav>
-          <div className="p-4 border-t border-white/10">
-            <div className="flex items-center gap-2 text-xs text-slate-400">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              7 Agents Active
-            </div>
+          <div className="p-3 border-t border-white/10">
+            <NavLink to="/command-center" className={navClass}>
+              <Terminal size={18} />
+              Command Center
+            </NavLink>
           </div>
         </aside>
 
@@ -75,13 +72,17 @@ export default function App() {
         <main className="flex-1 overflow-auto bg-slate-950 pb-[72px] md:pb-0">
           <Routes>
             <Route path="/" element={<Dashboard />} />
-            <Route path="/calls" element={<TodayCalls />} />
+            <Route path="/manage" element={<BDManagement />} />
+            <Route path="/manage/:id" element={<DetailView mode="management" />} />
+            <Route path="/clients" element={<ClientsRevenue />} />
+            <Route path="/clients/:id" element={<DetailView mode="client" />} />
             <Route path="/leads" element={<Leads />} />
-            <Route path="/clients" element={<Clients />} />
-            <Route path="/revenue" element={<Revenue />} />
-            <Route path="/transcripts" element={<Transcripts />} />
-            <Route path="/activity" element={<ActivityFeed />} />
-            <Route path="/reports" element={<Reports />} />
+            <Route path="/leads/:id" element={<DetailView mode="lead" />} />
+            <Route path="/enterprise" element={<Enterprise />} />
+            <Route path="/mindy-cc" element={<MindyCC />} />
+            <Route path="/calls" element={<Calls />} />
+            <Route path="/fireflies" element={<Fireflies />} />
+            <Route path="/command-center" element={<CommandCenter />} />
           </Routes>
         </main>
 
@@ -99,10 +100,9 @@ export default function App() {
               }
             >
               <Icon size={20} />
-              <span>{label}</span>
+              <span className="truncate w-full text-center px-0.5">{label.split(' ')[0]}</span>
             </NavLink>
           ))}
-          {/* More button */}
           <button
             onClick={() => setDrawerOpen(true)}
             className="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 text-[10px] font-medium text-slate-500"
@@ -112,14 +112,11 @@ export default function App() {
           </button>
         </nav>
 
-        {/* Mobile drawer for extra nav items */}
+        {/* Mobile drawer */}
         {drawerOpen && (
           <>
-            <div
-              className="md:hidden fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
-              onClick={() => setDrawerOpen(false)}
-            />
-            <div className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-slate-900 border-t border-white/10 rounded-t-2xl pb-safe">
+            <div className="md:hidden fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" onClick={() => setDrawerOpen(false)} />
+            <div className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-slate-900 border-t border-white/10 rounded-t-2xl">
               <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
                 <div className="flex items-center gap-2.5">
                   <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center">
@@ -139,9 +136,7 @@ export default function App() {
                     onClick={() => setDrawerOpen(false)}
                     className={({ isActive }) =>
                       `flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
-                        isActive
-                          ? 'bg-purple-600 text-white'
-                          : 'text-slate-300 hover:bg-white/5'
+                        isActive ? 'bg-purple-600 text-white' : 'text-slate-300 hover:bg-white/5'
                       }`
                     }
                   >
@@ -149,12 +144,18 @@ export default function App() {
                     {label}
                   </NavLink>
                 ))}
-              </div>
-              <div className="px-5 pb-4 pt-2">
-                <div className="flex items-center gap-2 text-xs text-slate-500">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  7 Agents Active
-                </div>
+                <NavLink
+                  to="/command-center"
+                  onClick={() => setDrawerOpen(false)}
+                  className={({ isActive }) =>
+                    `flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
+                      isActive ? 'bg-purple-600 text-white' : 'text-slate-400 hover:bg-white/5'
+                    }`
+                  }
+                >
+                  <Terminal size={18} />
+                  Command Center
+                </NavLink>
               </div>
             </div>
           </>

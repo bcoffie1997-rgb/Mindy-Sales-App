@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Search, ChevronDown, ChevronUp, ExternalLink, RefreshCw } from 'lucide-react'
+import { Search, ChevronDown, ChevronUp, ExternalLink, RefreshCw, ArrowRight } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 
 interface Lead {
   id: string
@@ -46,6 +47,7 @@ function fmtDate(iso: string) {
 }
 
 export default function Leads() {
+  const navigate = useNavigate()
   const [leads, setLeads] = useState<Lead[]>([])
   const [search, setSearch] = useState('')
   const [scoreFilter, setScoreFilter] = useState<string>('all')
@@ -175,7 +177,7 @@ export default function Leads() {
           <div className="card p-8 text-center text-slate-500">No leads found</div>
         ) : (
           filtered.map(lead => (
-            <div key={lead.id} className="card p-4 space-y-2">
+            <div key={lead.id} onClick={() => navigate(`/leads/${encodeURIComponent(lead.id)}`)} className="card p-4 space-y-2 cursor-pointer hover:bg-white/[0.04] transition-colors">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <p className="font-semibold text-slate-100 truncate">{lead.name}</p>
@@ -255,7 +257,7 @@ export default function Leads() {
               <tr><td colSpan={8} className="px-4 py-12 text-center text-slate-500">No leads found</td></tr>
             ) : (
               filtered.map(lead => (
-                <tr key={lead.id} className="hover:bg-white/[0.03] transition-colors">
+                <tr key={lead.id} onClick={() => navigate(`/leads/${encodeURIComponent(lead.id)}`)} className="hover:bg-white/[0.03] transition-colors cursor-pointer">
                   <td className="px-4 py-3">
                     <div className="font-medium text-slate-200">{lead.name}</div>
                     <div className="text-xs text-slate-500">{lead.email}</div>
@@ -291,11 +293,7 @@ export default function Leads() {
                   </td>
                   <td className="px-4 py-3 text-center text-slate-400">{lead.follow_up_count ?? 0}</td>
                   <td className="px-4 py-3">
-                    {lead.notes && (
-                      <span title={lead.notes} className="text-slate-500 cursor-help hover:text-purple-400 transition-colors">
-                        <ExternalLink size={14} />
-                      </span>
-                    )}
+                    <ArrowRight size={14} className="text-slate-600 group-hover:text-purple-400" />
                   </td>
                 </tr>
               ))
