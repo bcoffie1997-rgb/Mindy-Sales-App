@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Users, UserCheck, Flame, Zap, Mail, Phone, FileText, CheckCircle, XCircle, Clock, AlertTriangle, DollarSign } from 'lucide-react'
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
+import TeamTodos from './TeamTodos'
 
 interface Stats {
   total: number
@@ -84,12 +85,12 @@ export default function Dashboard() {
     }
   }
 
-  if (!stats) return <div className="p-8 text-slate-400">Loading...</div>
-
-  const scoreData = Object.entries(stats.byScore).map(([name, value]) => ({ name, value }))
-  const statusData = Object.entries(stats.byStatus)
-    .map(([key, value]) => ({ name: STATUS_LABELS[key] || key, value }))
-    .sort((a, b) => b.value - a.value)
+  const scoreData = stats ? Object.entries(stats.byScore).map(([name, value]) => ({ name, value })) : []
+  const statusData = stats
+    ? Object.entries(stats.byStatus)
+        .map(([key, value]) => ({ name: STATUS_LABELS[key] || key, value }))
+        .sort((a, b) => b.value - a.value)
+    : []
 
   return (
     <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
@@ -106,6 +107,14 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* Team To-Dos + managed clients */}
+      <TeamTodos />
+
+      {!stats && (
+        <div className="card p-6 text-center text-sm text-slate-500">Loading pipeline stats…</div>
+      )}
+
+      {stats && (<>
       {/* Metric Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
         <MetricCard icon={Users} label="Active Leads" value={stats.totalLeads || stats.total} color="blue" />
@@ -205,6 +214,7 @@ export default function Dashboard() {
           <p className="text-sm text-slate-500">No leads yet. Agents will populate this once they start running.</p>
         )}
       </div>
+      </>)}
 
       {/* Full Executive Report Modal */}
       {showReport && (
