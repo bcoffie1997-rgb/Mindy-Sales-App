@@ -188,7 +188,7 @@ function getStripe() {
 async function fetchAllCharges(since: Date): Promise<any[]> {
   const stripe = getStripe()
   if (!stripe) return []
-  const { data: cached } = await supabase.from('stripe_cache').select('data, fetched_at').eq('id', 1).single()
+  const { data: cached } = await supabase.from('stripe_cache').select('data, fetched_at').eq('id', 1).maybeSingle()
   if (cached && (Date.now() - new Date(cached.fetched_at).getTime()) < CACHE_TTL_MS) {
     const cutoff = Math.floor(since.getTime() / 1000)
     return (cached.data as any[]).filter((c: any) => c.created >= cutoff)
@@ -419,20 +419,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (slug[0]==='leads' && slug[1] && slug.length===2) {
       const id = slug[1]
       if (method === 'GET') {
-        const { data, error } = await supabase.from('leads').select('*').eq('id',id).single()
-        if (error) return res.status(404).json({ error:'Lead not found' })
+        const { data, error } = await supabase.from('leads').select('*').eq('id',id).maybeSingle()
+        if (error || !data) return res.status(404).json({ error:'Lead not found' })
         return res.json(data)
       }
       if (method === 'PATCH') {
-        const { data, error } = await supabase.from('leads').update({...req.body, last_action_date:new Date().toISOString()}).eq('id',id).select().single()
-        if (error) return res.status(404).json({ error:'Lead not found' })
+        const { data, error } = await supabase.from('leads').update({...req.body, last_action_date:new Date().toISOString()}).eq('id',id).select().maybeSingle()
+        if (error || !data) return res.status(404).json({ error:'Lead not found' })
         return res.json(data)
       }
     }
 
     // GET /api/calls
     if (path === 'calls') {
-      const { data } = await supabase.from('calls_cache').select('payload').eq('id',1).single()
+      const { data } = await supabase.from('calls_cache').select('payload').eq('id',1).maybeSingle()
       return res.json(data?.payload||{today:[],tomorrow:[],this_week:[],generated_at:null})
     }
 
@@ -501,7 +501,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // GET /api/reports/:type
     if (slug[0]==='reports' && slug[1]) {
       const type = slug[1], date = (req.query.date as string)||new Date().toISOString().slice(0,10)
-      const { data, error } = await supabase.from('reports').select('content').eq('filename',`${date}-${type}.md`).single()
+      const { data, error } = await supabase.from('reports').select('content').eq('filename',`${date}-${type}.md`).maybeSingle()
       if (error||!data) return res.status(404).json({ error:'Report not found' })
       return res.json({ date, type, content:data.content })
     }
@@ -666,9 +666,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ error: e?.raw?.message || e?.message || 'Stripe rejected the refund' })
       }
 
-      // Revenue figures come from a 30-minute charge cache — drop it so the refund
-      // is reflected immediately instead of up to half an hour later.
-      try { await supabase.from('stripe_cache').delete().eq('id', 1) } catch (_) { /* non-fatal */ }
+      // Revenue figures come from a 30-minute charge cache — expire it so the refund
+      // is reflected immediately instead of up to half an hour later. Age the row out
+      // rather than deleting it, so the next cache read still finds a row.
+      try {
+        await supabase.from('stripe_cache').update({ fetched_at: new Date(0).toISOString() }).eq('id', 1)
+      } catch (_) { /* non-fatal */ }
 
       // Audit trail. The money has already moved, so a logging failure must never
       // be reported back as a failed refund.
