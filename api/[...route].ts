@@ -208,6 +208,16 @@ async function fetchAllCharges(since: Date): Promise<any[]> {
   const cutoff = Math.floor(since.getTime() / 1000)
   return allCharges.filter((c: any) => c.created >= cutoff)
 }
+// A refunded charge KEEPS status 'succeeded' in Stripe; the refund surfaces as
+// amount_refunded. Every revenue figure has to net it out, or refunds stay
+// invisible and reported revenue overstates by the refunded amount.
+function netAmountCents(c: any) {
+  return Math.max(0, (c?.amount || 0) - (c?.amount_refunded || 0))
+}
+function netAmount(c: any) {
+  return netAmountCents(c) / 100
+}
+
 function matchStripeToLead(email: string, name: string, leads: any[]): any | null {
   if (!email && !name) return null
   const e = (email || '').toLowerCase(), n = (name || '').toLowerCase()
@@ -236,8 +246,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const method = req.method || 'GET'
 
   if (path === 'session' && method === 'GET') {
-    const authRequired = !!process.env.DASHBOARD_PASSWORD
-    return res.json({ authenticated:!authRequired || isAuthorized(req), authRequired })
+    const configured = !!(process.env.DASHBOARD_PASSWORD || '').trim()
+    // Auth is always required now. When it isn't configured the API is locked,
+    // so report "not authenticated" and let the login screen explain why.
+    return res.json({ authenticated: configured && isAuthorized(req), authRequired: true, configured })
   }
 
   if (path === 'login' && method === 'POST') {
@@ -271,7 +283,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
   }
 
-  if (process.env.DASHBOARD_PASSWORD && !isAuthorized(req)) {
+  // Fail CLOSED: if DASHBOARD_PASSWORD is ever unset, renamed, or cleared during
+  // an env edit, this must lock the API rather than silently serving the whole
+  // CRM to anyone with the URL.
+  if (!(process.env.DASHBOARD_PASSWORD || '').trim()) {
+    return res.status(503).json({
+      error:'API locked: DASHBOARD_PASSWORD is not set on the server.',
+      hint:'Set DASHBOARD_PASSWORD (and API_SECRET) in the Vercel project environment variables, then redeploy.'
+    })
+  }
+  if (!isAuthorized(req)) {
     return res.status(401).json({ error:'Authentication required' })
   }
 
@@ -294,6 +315,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     (method === 'PATCH' && slug[0] === 'leads' && slug.length === 2) ||
     (method === 'POST' && path === 'stripe-crossref/upgrade') ||
     (method === 'POST' && path === 'seed-from-stripe') ||
+    (method === 'POST' && path === 'refund') ||
     (method === 'POST' && path === 'admin/import')
   if (mutationRequiresAuth && !authorizeMutation(req, res)) return
 
@@ -496,7 +518,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       for (const c of allCharges) {
         const d = new Date(c.created*1000), key = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')
         if (!monthlyRevenue[key]) monthlyRevenue[key] = {revenue:0,count:0}
-        monthlyRevenue[key].revenue += c.amount/100; monthlyRevenue[key].count++
+        monthlyRevenue[key].revenue += netAmount(c); monthlyRevenue[key].count++
       }
       const thisMonthKey = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')
       const lastMonthKey = startOfLastMonth.getFullYear()+'-'+String(startOfLastMonth.getMonth()+1).padStart(2,'0')
@@ -504,10 +526,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const ytd = Object.entries(monthlyRevenue).filter(([k])=>k>=now.getFullYear()+'-01').reduce((s,[,v])=>s+v.revenue,0)
       const thisMonthCharges = allCharges.filter(c=>c.created>=Math.floor(startOfMonth.getTime()/1000))
       const dailyRevenue:Record<string,number> = {}
-      for (const c of thisMonthCharges) { const day=new Date(c.created*1000).toISOString().slice(0,10); dailyRevenue[day]=(dailyRevenue[day]||0)+c.amount/100 }
-      const recentTransactions = allCharges.slice(0,30).map((c:any) => { const email=c.billing_details?.email||c.receipt_email||'', name=c.billing_details?.name||'', match=matchStripeToLead(email,name,allLeads||[]); return {id:c.id,amount:c.amount/100,currency:c.currency,description:c.description||c.metadata?.product||'Payment',customer_email:email,customer_name:name,date:new Date(c.created*1000).toISOString(),status:c.status,client_match:match?{id:match.id,name:match.name,type:match.type,score:match.score,client_tier:match.client_tier}:null,platform:c.metadata?.platform||null} })
+      for (const c of thisMonthCharges) { const day=new Date(c.created*1000).toISOString().slice(0,10); dailyRevenue[day]=(dailyRevenue[day]||0)+netAmount(c) }
+      const recentTransactions = allCharges.slice(0,30).map((c:any) => { const email=c.billing_details?.email||c.receipt_email||'', name=c.billing_details?.name||'', match=matchStripeToLead(email,name,allLeads||[]); return {id:c.id,amount:netAmount(c),gross_amount:(c.amount||0)/100,amount_refunded:(c.amount_refunded||0)/100,refunded:!!c.refunded,refundable:netAmount(c),currency:c.currency,description:c.description||c.metadata?.product||'Payment',customer_email:email,customer_name:name,date:new Date(c.created*1000).toISOString(),status:c.status,client_match:match?{id:match.id,name:match.name,type:match.type,score:match.score,client_tier:match.client_tier}:null,platform:c.metadata?.platform||null} })
       const productGroups:Record<string,{name:string;count:number;total:number;customers:string[]}> = {}
-      for (const c of allCharges) { const rawDesc=c.description||c.metadata?.memberpress_product||c.metadata?.product||'Other'; let group=rawDesc; if(/subscription (update|creation)/i.test(rawDesc))group='Mighty Networks / Subscription'; else if(/ai tools.*crm.*research/i.test(rawDesc))group='AI Tools + CRM + Research'; else if(/ai tools/i.test(rawDesc))group='AI Tools'; if(!productGroups[group])productGroups[group]={name:group,count:0,total:0,customers:[]}; productGroups[group].count++; productGroups[group].total+=c.amount/100; const cn=c.billing_details?.name||c.receipt_email||'Unknown'; if(!productGroups[group].customers.includes(cn))productGroups[group].customers.push(cn) }
+      for (const c of allCharges) { const rawDesc=c.description||c.metadata?.memberpress_product||c.metadata?.product||'Other'; let group=rawDesc; if(/subscription (update|creation)/i.test(rawDesc))group='Mighty Networks / Subscription'; else if(/ai tools.*crm.*research/i.test(rawDesc))group='AI Tools + CRM + Research'; else if(/ai tools/i.test(rawDesc))group='AI Tools'; if(!productGroups[group])productGroups[group]={name:group,count:0,total:0,customers:[]}; productGroups[group].count++; productGroups[group].total+=netAmount(c); const cn=c.billing_details?.name||c.receipt_email||'Unknown'; if(!productGroups[group].customers.includes(cn))productGroups[group].customers.push(cn) }
       const mom = lastMonth>0?((thisMonth-lastMonth)/lastMonth*100).toFixed(1):null
       return res.json({ enabled:true,thisMonth,lastMonth,ytd,transactionCount:thisMonthCharges.length,totalCharges:allCharges.length,recentTransactions,dailyRevenue,monthlyRevenue:Object.entries(monthlyRevenue).sort().map(([month,data])=>({month,...data})),productGroups:Object.values(productGroups).sort((a,b)=>b.total-a.total),monthOverMonth:mom })
     }
@@ -519,15 +541,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const now = new Date(), twelveMonthsAgo = new Date(now.getFullYear(),now.getMonth()-12,1)
       const [allCharges,activeSubs,{data:allLeads}] = await Promise.all([fetchAllCharges(twelveMonthsAgo),stripe.subscriptions.list({limit:100,status:'active'}),supabase.from('leads').select('id,name,email,type,client_tier,client_status')])
       const monthly:Record<string,{revenue:number;count:number}> = {}
-      for (const c of allCharges) { const d=new Date(c.created*1000),key=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); if(!monthly[key])monthly[key]={revenue:0,count:0}; monthly[key].revenue+=c.amount/100; monthly[key].count++ }
+      for (const c of allCharges) { const d=new Date(c.created*1000),key=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); if(!monthly[key])monthly[key]={revenue:0,count:0}; monthly[key].revenue+=netAmount(c); monthly[key].count++ }
       let mrr=0; for (const s of activeSubs.data) { const item=s.items.data[0],amount=item?.price?.unit_amount?item.price.unit_amount/100:0,interval=item?.price?.recurring?.interval||'month'; mrr+=interval==='year'?amount/12:amount }
       const sortedMonths=Object.entries(monthly).sort(), currentMonth=sortedMonths[sortedMonths.length-1], prevMonth=sortedMonths[sortedMonths.length-2]
       const ytd=sortedMonths.filter(([k])=>k.startsWith(String(now.getFullYear()))).reduce((s,[,v])=>s+v.revenue,0)
       const customerTotals:Record<string,{name:string;email:string;total:number;count:number}> = {}
-      for (const c of allCharges) { const email=c.billing_details?.email||c.receipt_email||'',name=c.billing_details?.name||email||'Unknown',key=email||name; if(!customerTotals[key])customerTotals[key]={name,email,total:0,count:0}; customerTotals[key].total+=c.amount/100; customerTotals[key].count++ }
+      for (const c of allCharges) { const email=c.billing_details?.email||c.receipt_email||'',name=c.billing_details?.name||email||'Unknown',key=email||name; if(!customerTotals[key])customerTotals[key]={name,email,total:0,count:0}; customerTotals[key].total+=netAmount(c); customerTotals[key].count++ }
       const topCustomers=Object.values(customerTotals).sort((a,b)=>b.total-a.total).slice(0,10)
       const growthData=sortedMonths.map(([month,data],i)=>({month,revenue:data.revenue,count:data.count,growth:i>0?((data.revenue-sortedMonths[i-1][1].revenue)/sortedMonths[i-1][1].revenue*100).toFixed(1)+'%':'N/A'}))
-      return res.json({ enabled:true, report:{ generated:now.toISOString(), summary:{ thisMonth:currentMonth?{month:currentMonth[0],revenue:currentMonth[1].revenue,transactions:currentMonth[1].count}:null, lastMonth:prevMonth?{month:prevMonth[0],revenue:prevMonth[1].revenue,transactions:prevMonth[1].count}:null, ytd,mrr:Math.round(mrr*100)/100,activeSubscriptions:activeSubs.data.length,totalTransactions:allCharges.length,avgTransactionValue:allCharges.length>0?Math.round(allCharges.reduce((s,c)=>s+c.amount/100,0)/allCharges.length):0 }, monthlyTrend:growthData, topCustomers, clientMatches:topCustomers.map(tc=>{const match=matchStripeToLead(tc.email,tc.name,allLeads||[]);return{...tc,client_match:match?{name:match.name,type:match.type,tier:match.client_tier,status:match.client_status}:null}}) } })
+      return res.json({ enabled:true, report:{ generated:now.toISOString(), summary:{ thisMonth:currentMonth?{month:currentMonth[0],revenue:currentMonth[1].revenue,transactions:currentMonth[1].count}:null, lastMonth:prevMonth?{month:prevMonth[0],revenue:prevMonth[1].revenue,transactions:prevMonth[1].count}:null, ytd,mrr:Math.round(mrr*100)/100,activeSubscriptions:activeSubs.data.length,totalTransactions:allCharges.length,avgTransactionValue:allCharges.length>0?Math.round(allCharges.reduce((s,c)=>s+netAmount(c),0)/allCharges.length):0 }, monthlyTrend:growthData, topCustomers, clientMatches:topCustomers.map(tc=>{const match=matchStripeToLead(tc.email,tc.name,allLeads||[]);return{...tc,client_match:match?{name:match.name,type:match.type,tier:match.client_tier,status:match.client_status}:null}}) } })
     }
 
     // GET /api/subscriptions
@@ -564,7 +586,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const now=new Date(),twelveMonthsAgo=new Date(now.getFullYear(),now.getMonth()-12,1)
       const [allCharges,{data:allLeads}]=await Promise.all([fetchAllCharges(twelveMonthsAgo),supabase.from('leads').select('id,name,email,type,score,status,client_tier')])
       const payers:Record<string,{name:string;email:string;total:number;count:number;lastPayment:string}> = {}
-      for (const c of allCharges) { const email=(c.billing_details?.email||c.receipt_email||'').toLowerCase(),name=c.billing_details?.name||'',key=email||name.toLowerCase(); if(!key)continue; if(!payers[key])payers[key]={name,email,total:0,count:0,lastPayment:''}; payers[key].total+=c.amount/100; payers[key].count++; const dt=new Date(c.created*1000).toISOString(); if(dt>payers[key].lastPayment)payers[key].lastPayment=dt; if(name&&!payers[key].name)payers[key].name=name }
+      for (const c of allCharges) { const email=(c.billing_details?.email||c.receipt_email||'').toLowerCase(),name=c.billing_details?.name||'',key=email||name.toLowerCase(); if(!key)continue; if(!payers[key])payers[key]={name,email,total:0,count:0,lastPayment:''}; payers[key].total+=netAmount(c); payers[key].count++; const dt=new Date(c.created*1000).toISOString(); if(dt>payers[key].lastPayment)payers[key].lastPayment=dt; if(name&&!payers[key].name)payers[key].name=name }
       const missingClients:any[]=[],matchedAsLead:any[]=[],matchedAsClient:any[]=[]
       for (const payer of Object.values(payers)) { const match=matchStripeToLead(payer.email,payer.name,allLeads||[]); if(!match)missingClients.push({...payer,status:'not_in_crm'}); else if(match.type!=='client')matchedAsLead.push({...payer,lead:{id:match.id,name:match.name,score:match.score,status:match.status}}); else matchedAsClient.push({...payer,client:{id:match.id,name:match.name,tier:match.client_tier}}) }
       return res.json({ enabled:true, summary:{totalPayers:Object.keys(payers).length,matchedAsClient:matchedAsClient.length,matchedAsLead:matchedAsLead.length,notInCrm:missingClients.length}, needsUpgrade:matchedAsLead.sort((a,b)=>b.total-a.total), missingFromCrm:missingClients.sort((a,b)=>b.total-a.total), confirmedClients:matchedAsClient.sort((a,b)=>b.total-a.total) })
@@ -585,13 +607,105 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const now=new Date(),twelveMonthsAgo=new Date(now.getFullYear(),now.getMonth()-12,1)
       const [allCharges,{data:allLeads}]=await Promise.all([fetchAllCharges(twelveMonthsAgo),supabase.from('leads').select('id,name,email,type,score,client_tier,status')])
       const q=((req.query.q as string)||'').toLowerCase()
-      const transactions=allCharges.map((c:any)=>{ const email=c.billing_details?.email||c.receipt_email||'',name=c.billing_details?.name||'',desc=c.description||c.metadata?.memberpress_product||c.metadata?.product||'',match=matchStripeToLead(email,name,allLeads||[]); return {id:c.id,amount:c.amount/100,currency:c.currency,description:desc,customer_email:email,customer_name:name,date:new Date(c.created*1000).toISOString(),client_match:match?{id:match.id,name:match.name,type:match.type,score:match.score,client_tier:match.client_tier,status:match.status}:null,platform:c.metadata?.platform||null} })
+      const transactions=allCharges.map((c:any)=>{ const email=c.billing_details?.email||c.receipt_email||'',name=c.billing_details?.name||'',desc=c.description||c.metadata?.memberpress_product||c.metadata?.product||'',match=matchStripeToLead(email,name,allLeads||[]); return {id:c.id,amount:netAmount(c),gross_amount:(c.amount||0)/100,amount_refunded:(c.amount_refunded||0)/100,refunded:!!c.refunded,refundable:netAmount(c),currency:c.currency,description:desc,customer_email:email,customer_name:name,date:new Date(c.created*1000).toISOString(),client_match:match?{id:match.id,name:match.name,type:match.type,score:match.score,client_tier:match.client_tier,status:match.status}:null,platform:c.metadata?.platform||null} })
       const filtered=q?transactions.filter((t:any)=>t.customer_name.toLowerCase().includes(q)||t.customer_email.toLowerCase().includes(q)||t.description.toLowerCase().includes(q)||(t.client_match?.name||'').toLowerCase().includes(q)):transactions
       return res.json({ enabled:true,total:transactions.length,results:filtered })
     }
 
     // POST /api/seed-from-stripe (protected by Bearer API_SECRET)
     // One-time: reconstruct client roster from Stripe payers into Supabase.
+    // POST /api/refund { chargeId, amount?, reason? } — issue a Stripe refund.
+    // Authorized above via mutationRequiresAuth.
+    if (path === 'refund' && method === 'POST') {
+      const stripe = getStripe()
+      if (!stripe) return res.status(503).json({ error:'Stripe is not configured' })
+
+      const body = (req.body || {}) as any
+      const chargeId = typeof body.chargeId === 'string' ? body.chargeId.trim() : ''
+      if (!chargeId) return res.status(400).json({ error:'chargeId is required' })
+
+      const ALLOWED_REASONS = ['duplicate','fraudulent','requested_by_customer']
+      const refundReason = ALLOWED_REASONS.includes(body.reason) ? body.reason : 'requested_by_customer'
+
+      // Never trust a client-supplied amount: re-read the charge from Stripe and
+      // cap the refund at what is genuinely still refundable on it.
+      let charge: any
+      try {
+        charge = await stripe.charges.retrieve(chargeId)
+      } catch (e: any) {
+        return res.status(404).json({ error:`Charge not found: ${e?.raw?.message || e?.message || e}` })
+      }
+      if (charge.status !== 'succeeded') {
+        return res.status(400).json({ error:`Charge status is "${charge.status}" — only succeeded charges can be refunded` })
+      }
+      const refundableCents = netAmountCents(charge)
+      if (refundableCents <= 0) return res.status(400).json({ error:'Charge has already been fully refunded' })
+
+      let cents = refundableCents
+      if (body.amount !== undefined && body.amount !== null && body.amount !== '') {
+        const dollars = Number(body.amount)
+        if (!Number.isFinite(dollars) || dollars <= 0) {
+          return res.status(400).json({ error:'amount must be a positive number of dollars' })
+        }
+        cents = Math.round(dollars * 100)
+        if (cents > refundableCents) {
+          return res.status(400).json({ error:`Amount exceeds the $${(refundableCents/100).toFixed(2)} still refundable on this charge` })
+        }
+      }
+
+      let refund: any
+      try {
+        refund = await stripe.refunds.create(
+          { charge: chargeId, amount: cents, reason: refundReason },
+          // Keyed on the charge's refund state *plus* the amount, so a double-click
+          // or a serverless retry collapses into one refund, while a deliberate
+          // second refund of the same amount later still goes through on its own.
+          { idempotencyKey: `refund_${chargeId}_${charge.amount_refunded || 0}_${cents}` }
+        )
+      } catch (e: any) {
+        return res.status(400).json({ error: e?.raw?.message || e?.message || 'Stripe rejected the refund' })
+      }
+
+      // Revenue figures come from a 30-minute charge cache — drop it so the refund
+      // is reflected immediately instead of up to half an hour later.
+      try { await supabase.from('stripe_cache').delete().eq('id', 1) } catch (_) { /* non-fatal */ }
+
+      // Audit trail. The money has already moved, so a logging failure must never
+      // be reported back as a failed refund.
+      let logged = true
+      try {
+        const { error } = await supabase.from('refunds').insert({
+          id: refund.id,
+          charge_id: chargeId,
+          amount: cents / 100,
+          currency: refund.currency,
+          reason: refundReason,
+          status: refund.status,
+          customer_email: charge.billing_details?.email || charge.receipt_email || null,
+          customer_name: charge.billing_details?.name || null
+        })
+        if (error) logged = false
+      } catch (_) { logged = false }
+
+      return res.json({
+        id: refund.id,
+        chargeId,
+        amount: cents / 100,
+        currency: refund.currency,
+        status: refund.status,
+        reason: refundReason,
+        remainingRefundable: (refundableCents - cents) / 100,
+        logged
+      })
+    }
+
+    // GET /api/refunds — audit log of refunds issued through this dashboard
+    if (path === 'refunds' && method === 'GET') {
+      const { data, error } = await supabase.from('refunds').select('*').order('created_at',{ascending:false}).limit(200)
+      if (error) return res.json([])
+      return res.json(data || [])
+    }
+
     if (path === 'seed-from-stripe' && method === 'POST') {
       if (!getStripe()) return res.status(400).json({ error: 'Stripe not configured' })
 
@@ -607,7 +721,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const key = email || name.toLowerCase()
         if (!key) continue
         if (!payers[key]) payers[key] = { email, name, total: 0, count: 0, lastDate: '', firstDate: '', lastDesc: '' }
-        payers[key].total += c.amount / 100
+        payers[key].total += netAmount(c)
         payers[key].count++
         const dt = new Date(c.created * 1000).toISOString()
         if (!payers[key].firstDate || dt < payers[key].firstDate) payers[key].firstDate = dt

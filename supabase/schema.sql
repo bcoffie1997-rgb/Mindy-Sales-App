@@ -103,3 +103,22 @@ ALTER TABLE calls_cache  DISABLE ROW LEVEL SECURITY;
 ALTER TABLE reports      DISABLE ROW LEVEL SECURITY;
 ALTER TABLE proposals    DISABLE ROW LEVEL SECURITY;
 ALTER TABLE stripe_cache DISABLE ROW LEVEL SECURITY;
+
+-- Refund audit log. Every refund issued through the dashboard is recorded here;
+-- Stripe remains the source of truth, this is for "who refunded what, when".
+CREATE TABLE IF NOT EXISTS refunds (
+  id TEXT PRIMARY KEY,                -- Stripe refund id (re_...)
+  charge_id TEXT NOT NULL,            -- Stripe charge id (ch_...)
+  amount NUMERIC NOT NULL,
+  currency TEXT,
+  reason TEXT,
+  status TEXT,
+  customer_email TEXT,
+  customer_name TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS refunds_charge_idx ON refunds(charge_id);
+CREATE INDEX IF NOT EXISTS refunds_created_idx ON refunds(created_at DESC);
+
+ALTER TABLE refunds DISABLE ROW LEVEL SECURITY;

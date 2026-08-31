@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { DollarSign, TrendingUp, TrendingDown, CreditCard, RefreshCw, ArrowUpRight, Users, FileText, Search, ChevronDown, ChevronUp, AlertCircle } from 'lucide-react'
+import { DollarSign, TrendingUp, TrendingDown, CreditCard, RefreshCw, ArrowUpRight, Users, FileText, Search, ChevronDown, ChevronUp, AlertCircle, Undo2 } from 'lucide-react'
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { apiFetch, getErrorMessage } from '../lib/api'
+import RefundDialog, { type RefundableTx } from './RefundDialog'
 
 interface RevenueData {
   enabled: boolean
@@ -42,6 +43,7 @@ interface ReportData {
 
 interface Transaction {
   id: string; amount: number; currency: string; description: string
+  gross_amount?: number; amount_refunded?: number; refunded?: boolean; refundable?: number
   customer_email: string; customer_name: string; date: string; status: string
   client_match: { id: string; name: string; type: string; score: string; client_tier: string } | null
   platform: string | null
@@ -131,6 +133,15 @@ export default function Revenue() {
   const [showCrossRef, setShowCrossRef] = useState(false)
   const [upgrading, setUpgrading] = useState<string[]>([])
   const [crossRefError, setCrossRefError] = useState<string | null>(null)
+
+  const [refundTx, setRefundTx] = useState<RefundableTx | null>(null)
+
+  // A refund invalidates the cached Stripe figures — pull everything again.
+  const afterRefund = async () => {
+    await load()
+    if (txSearch) await searchTransactions(txSearch)
+    else setTxResults(null)
+  }
 
   const load = async () => {
     setLoading(true)
@@ -474,6 +485,7 @@ export default function Revenue() {
                 <th className="pb-2 font-medium">CRM Match</th>
                 <th className="pb-2 font-medium text-right">Amount</th>
                 <th className="pb-2 font-medium text-right">Date</th>
+                <th className="pb-2 font-medium text-right">Refund</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
@@ -491,17 +503,34 @@ export default function Revenue() {
                       </span>
                     ) : <span className="text-[10px] text-slate-600">No match</span>}
                   </td>
-                  <td className="py-2 text-right font-semibold text-emerald-400 text-xs">{fmtFull(tx.amount)}</td>
+                  <td className="py-2 text-right text-xs">
+                    <span className="font-semibold text-emerald-400">{fmtFull(tx.amount)}</span>
+                    {(tx.amount_refunded || 0) > 0 && (
+                      <span className="block text-[10px] text-amber-300/80">−{fmtFull(tx.amount_refunded)} refunded</span>
+                    )}
+                  </td>
                   <td className="py-2 text-right text-slate-500 text-xs whitespace-nowrap">
                     {new Date(tx.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })}
+                  </td>
+                  <td className="py-2 text-right">
+                    {(tx.refundable ?? tx.amount) > 0 ? (
+                      <button
+                        onClick={() => setRefundTx(tx as RefundableTx)}
+                        className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-lg bg-white/5 text-slate-400 border border-white/10 hover:border-red-500/40 hover:text-red-300 transition-colors"
+                      >
+                        <Undo2 className="w-3 h-3" /> Refund
+                      </button>
+                    ) : (
+                      <span className="text-[10px] text-amber-300/70">Refunded</span>
+                    )}
                   </td>
                 </tr>
               ))}
               {txResults && txResults.length === 0 && (
-                <tr><td colSpan={5} className="py-8 text-center text-slate-500 text-sm">No transactions match "{txSearch}"</td></tr>
+                <tr><td colSpan={6} className="py-8 text-center text-slate-500 text-sm">No transactions match "{txSearch}"</td></tr>
               )}
               {!txResults && revenue.recentTransactions.length === 0 && (
-                <tr><td colSpan={5} className="py-8 text-center text-slate-500 text-sm">No recent transactions</td></tr>
+                <tr><td colSpan={6} className="py-8 text-center text-slate-500 text-sm">No recent transactions</td></tr>
               )}
             </tbody>
           </table>
@@ -613,6 +642,10 @@ export default function Revenue() {
             )}
           </div>
         </div>
+      )}
+
+      {refundTx && (
+        <RefundDialog tx={refundTx} onClose={() => setRefundTx(null)} onRefunded={afterRefund} />
       )}
 
       {/* Executive Report Modal */}
