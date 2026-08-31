@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { FileText, Calendar, Sun, Moon, Shield } from 'lucide-react'
+import { apiFetch, getErrorMessage } from '../lib/api'
 
 interface ReportList {
   daily: string[]
@@ -10,24 +11,37 @@ export default function Reports() {
   const [reports, setReports] = useState<ReportList>({ daily: [], weekly: [] })
   const [activeReport, setActiveReport] = useState<{ content: string; filename: string } | null>(null)
   const [loading, setLoading] = useState(false)
+  const [listLoading, setListLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    fetch('/api/reports').then(r => r.json()).then(setReports).catch(() => {})
+    apiFetch<unknown>('/api/reports')
+      .then(data => {
+        if (!data || typeof data !== 'object') throw new Error('Reports response was invalid.')
+        const value = data as Partial<ReportList>
+        if (!Array.isArray(value.daily) || !Array.isArray(value.weekly)) throw new Error('Reports response is missing report lists.')
+        setReports({ daily: value.daily.filter((item): item is string => typeof item === 'string'), weekly: value.weekly.filter((item): item is string => typeof item === 'string') })
+      })
+      .catch(error => setError(getErrorMessage(error, 'Failed to load reports.')))
+      .finally(() => setListLoading(false))
   }, [])
 
   const loadReport = async (filename: string, subdir: string) => {
     setLoading(true)
+    setError(null)
     // Extract date and type from filename like "2026-04-10-morning.md"
     const match = filename.match(/^(\d{4}-\d{2}-\d{2})-(.+)\.md$/)
     if (match) {
       const [, date, type] = match
       try {
-        const r = await fetch(`/api/reports/${type}?date=${date}`)
-        if (r.ok) {
-          const data = await r.json()
-          setActiveReport({ content: data.content, filename })
+        const data = await apiFetch<unknown>(`/api/reports/${type}?date=${date}`)
+        if (!data || typeof data !== 'object' || typeof (data as { content?: unknown }).content !== 'string') {
+          throw new Error('Report response is missing its content.')
         }
-      } catch {}
+        setActiveReport({ content: (data as { content: string }).content, filename })
+      } catch (error) {
+        setError(getErrorMessage(error, 'Failed to load report.'))
+      }
     }
     setLoading(false)
   }
@@ -61,7 +75,9 @@ export default function Reports() {
             <h3 className="px-4 py-3 text-sm font-semibold text-slate-200 border-b border-white/10 flex items-center gap-2">
               <Calendar size={14} className="text-purple-400" /> Daily Reports
             </h3>
-            {reports.daily.length === 0 ? (
+            {listLoading ? (
+              <p className="px-4 py-6 text-sm text-slate-400 text-center">Loading reports...</p>
+            ) : reports.daily.length === 0 ? (
               <p className="px-4 py-6 text-sm text-slate-500 text-center">No reports yet</p>
             ) : (
               <div className="divide-y divide-white/5 max-h-[400px] overflow-y-auto">
@@ -86,7 +102,9 @@ export default function Reports() {
             <h3 className="px-4 py-3 text-sm font-semibold text-slate-200 border-b border-white/10 flex items-center gap-2">
               <Calendar size={14} className="text-purple-400" /> Weekly Reports
             </h3>
-            {reports.weekly.length === 0 ? (
+            {listLoading ? (
+              <p className="px-4 py-6 text-sm text-slate-400 text-center">Loading reports...</p>
+            ) : reports.weekly.length === 0 ? (
               <p className="px-4 py-6 text-sm text-slate-500 text-center">No reports yet</p>
             ) : (
               <div className="divide-y divide-white/5 max-h-[300px] overflow-y-auto">
@@ -111,6 +129,8 @@ export default function Reports() {
         <div className="flex-1 card">
           {loading ? (
             <div className="p-12 text-center text-slate-400">Loading report...</div>
+          ) : error ? (
+            <div className="p-12 text-center text-red-300">{error}</div>
           ) : activeReport ? (
             <div className="p-6">
               <h3 className="text-lg font-semibold text-white mb-4">{reportLabel(activeReport.filename)}</h3>

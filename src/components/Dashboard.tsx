@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Users, UserCheck, Flame, Phone, FileText, DollarSign } from 'lucide-react'
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
+import { apiFetch, getErrorMessage } from '../lib/api'
 
 interface Stats {
   total: number
@@ -13,6 +14,26 @@ interface Stats {
   recentLeads: any[]
   recentClients: any[]
   proposalsOut: number
+}
+
+function parseStats(value: unknown): Stats {
+  if (!value || typeof value !== 'object') throw new Error('Dashboard response was invalid.')
+  const data = value as Partial<Stats>
+  if (!data.byScore || typeof data.byScore !== 'object' || !data.byStatus || typeof data.byStatus !== 'object') {
+    throw new Error('Dashboard response is missing pipeline totals.')
+  }
+  return {
+    total: Number(data.total) || 0,
+    totalLeads: Number(data.totalLeads) || 0,
+    totalClients: Number(data.totalClients) || 0,
+    byScore: data.byScore,
+    byStatus: data.byStatus,
+    clientsByTier: data.clientsByTier && typeof data.clientsByTier === 'object' ? data.clientsByTier : {},
+    clientsByStatus: data.clientsByStatus && typeof data.clientsByStatus === 'object' ? data.clientsByStatus : {},
+    recentLeads: Array.isArray(data.recentLeads) ? data.recentLeads.filter(item => item && typeof item === 'object') : [],
+    recentClients: Array.isArray(data.recentClients) ? data.recentClients.filter(item => item && typeof item === 'object') : [],
+    proposalsOut: Number(data.proposalsOut) || 0,
+  }
 }
 
 const TIER_LABELS: Record<string, string> = {
@@ -50,30 +71,65 @@ export default function Dashboard() {
   const [stats, setStats] = useState<Stats | null>(null)
   const [showReport, setShowReport] = useState(false)
   const [reportData, setReportData] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [reportError, setReportError] = useState<string | null>(null)
 
   useEffect(() => {
-    fetch('/api/stats').then(r => r.json()).then(setStats).catch(() => {})
-    const interval = setInterval(() => {
-      fetch('/api/stats').then(r => r.json()).then(setStats).catch(() => {})
-    }, 60000)
+    const load = async () => {
+      try {
+        setStats(parseStats(await apiFetch<unknown>('/api/stats')))
+        setError(null)
+      } catch (error) {
+        setError(getErrorMessage(error, 'Failed to load dashboard.'))
+      } finally {
+        setLoading(false)
+      }
+    }
+    load()
+    const interval = setInterval(load, 60000)
     return () => clearInterval(interval)
   }, [])
 
-  const generateFullReport = () => {
+  const generateFullReport = async () => {
     setShowReport(true)
     if (!reportData) {
-      Promise.all([
-        fetch('/api/stats').then(r => r.json()),
-        fetch('/api/revenue/report').then(r => r.json()).catch(() => null),
-        fetch('/api/subscriptions').then(r => r.json()).catch(() => null),
-        fetch('/api/calls').then(r => r.json()).catch(() => null),
-      ]).then(([stats, rev, subs, calls]) => {
-        setReportData({ stats, revenue: rev?.report || null, subs, calls })
-      })
+      setReportError(null)
+      try {
+        const [statsResult, revResult, subsResult, callsResult] = await Promise.allSettled([
+          apiFetch<unknown>('/api/stats'),
+          apiFetch<any>('/api/revenue/report'),
+          apiFetch<any>('/api/subscriptions'),
+          apiFetch<any>('/api/calls'),
+        ])
+        if (statsResult.status === 'rejected') throw statsResult.reason
+        const revenue = revResult.status === 'fulfilled' && revResult.value?.report && typeof revResult.value.report === 'object'
+          ? {
+              ...revResult.value.report,
+              monthlyTrend: Array.isArray(revResult.value.report.monthlyTrend) ? revResult.value.report.monthlyTrend : [],
+              topCustomers: Array.isArray(revResult.value.report.topCustomers) ? revResult.value.report.topCustomers : [],
+            }
+          : null
+        const subs = subsResult.status === 'fulfilled' && subsResult.value && typeof subsResult.value === 'object'
+          ? { ...subsResult.value, planGroups: Array.isArray(subsResult.value.planGroups) ? subsResult.value.planGroups : [] }
+          : null
+        const calls = callsResult.status === 'fulfilled' && callsResult.value && typeof callsResult.value === 'object'
+          ? { ...callsResult.value, this_week: Array.isArray(callsResult.value.this_week) ? callsResult.value.this_week : [] }
+          : null
+        setReportData({
+          stats: parseStats(statsResult.value),
+          revenue,
+          subs,
+          calls,
+        })
+      } catch (error) {
+        setReportError(getErrorMessage(error, 'Failed to generate report.'))
+      }
     }
   }
 
-  if (!stats) return <div className="p-8 text-slate-400">Loading...</div>
+  if (loading) return <div className="p-8 text-slate-400">Loading dashboard...</div>
+  if (error || !stats) return <div className="p-8 text-red-300">{error || 'Dashboard data is unavailable.'}</div>
 
   const scoreData = Object.entries(stats.byScore).map(([name, value]) => ({ name, value }))
   const statusData = Object.entries(stats.byStatus)
@@ -181,7 +237,7 @@ export default function Dashboard() {
               <button onClick={() => setShowReport(false)} className="text-slate-400 hover:text-white text-2xl transition-colors">&times;</button>
             </div>
             {!reportData ? (
-              <div className="p-12 text-center text-slate-400">Generating report...</div>
+              <div className={`p-12 text-center ${reportError ? 'text-red-300' : 'text-slate-400'}`}>{reportError || 'Generating report...'}</div>
             ) : (
               <div className="p-6 space-y-8 text-sm">
                 {/* Pipeline Overview */}

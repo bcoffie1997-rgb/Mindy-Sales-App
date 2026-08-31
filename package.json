@@ -10,7 +10,8 @@
     "build": "vite build",
     "start": "tsx server/index.ts",
     "scheduler": "tsx server/scheduler.ts",
-    "scheduler:run-all": "tsx server/scheduler.ts --run-all"
+    "scheduler:run-all": "tsx server/scheduler.ts --run-all",
+    "migrate:supabase": "tsx scripts/migrate-to-supabase.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.4",

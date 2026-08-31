@@ -1,24 +1,182 @@
 // @ts-nocheck — runtime-tested serverless handler; skip strict type-check at build
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { createClient } from '@supabase/supabase-js'
+import { createHmac, timingSafeEqual } from 'node:crypto'
 import Stripe from 'stripe'
 
-const AGENTS = ['gc-lead-intake','gc-email-responder','gc-appointment-setter','gc-post-call','gc-crm-morning','gc-crm-evening','gc-qa-health']
+const AGENT_SCHEDULES = [
+  { id:'gc-lead-intake', name:'Lead Intake & Scoring', cron:'*/30 9-18 * * 1-5', description:'Monitors Gmail for new leads and scores them HOT/WARM/BASIC' },
+  { id:'gc-email-responder', name:'Email Responder & Follow-Up', cron:'32 9-17 * * 1-5', description:'Drafts first-touch emails and monitors replies' },
+  { id:'gc-appointment-setter', name:'Appointment Setter', cron:'57 9,11,13,15,17 * * 1-5', description:'Sends Calendly links, confirmations, reminders, and pre-call briefings' },
+  { id:'gc-post-call', name:'Post-Call & Proposal', cron:'50 9-17 * * 1-5', description:'Pulls Fireflies transcripts and drafts follow-ups/proposals' },
+  { id:'gc-crm-morning', name:'CRM Morning Briefing', cron:'7 7 * * 1-5', description:'Generates morning pipeline report and action plan' },
+  { id:'gc-qa-health', name:'QA & System Health', cron:'23 7 * * 1-5', description:'Validates data cleanliness and agent health' },
+  { id:'gc-crm-evening', name:'CRM Evening Reconciliation', cron:'39 17 * * 1-5', description:'End-of-day wrap-up and uncalled HOT leads list' },
+] as const
+const AGENTS = AGENT_SCHEDULES.map(agent => agent.id)
 const PROPOSAL_KEYWORDS = ['proposal sent','proposal delivered','pricing sent','engagement letter','sent proposal','sent pricing','payment link']
+const STARTED_AT = Date.now()
+const SESSION_COOKIE = 'mindy_session'
+const SESSION_TTL_SECONDS = 12 * 60 * 60
 
 // ── Supabase client (inlined; no relative imports to keep ESM happy) ──
 const SUPA_URL = (process.env.SUPABASE_URL || '').trim()
 const SUPA_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim()
 let initError: string | null = null
-let supabase: any
-try {
-  supabase = createClient(SUPA_URL || 'https://placeholder.supabase.co', SUPA_KEY || 'placeholder', { auth: { persistSession: false } })
-} catch (err: any) {
-  initError = err?.message || String(err)
-  supabase = createClient('https://placeholder.supabase.co', 'placeholder', { auth: { persistSession: false } })
+let supabase: any = null
+if (SUPA_URL && SUPA_KEY) {
+  try {
+    supabase = createClient(SUPA_URL, SUPA_KEY, { auth: { persistSession: false } })
+  } catch (err: any) {
+    initError = err?.message || String(err)
+  }
 }
 const supabaseReady = !!(SUPA_URL && SUPA_KEY) && !initError
-const supabaseUrlValue = SUPA_URL
+
+function cleanOrigin(value: string) {
+  return value.replace(/\/+$/, '')
+}
+
+function requestOrigin(req: VercelRequest) {
+  const protoHeader = req.headers['x-forwarded-proto']
+  const hostHeader = req.headers['x-forwarded-host'] || req.headers.host
+  const proto = (Array.isArray(protoHeader) ? protoHeader[0] : protoHeader || 'https').split(',')[0].trim()
+  const host = (Array.isArray(hostHeader) ? hostHeader[0] : hostHeader || '').split(',')[0].trim()
+  return host ? `${proto}://${host}` : ''
+}
+
+function setCors(req: VercelRequest, res: VercelResponse) {
+  const originHeader = req.headers.origin
+  const origin = Array.isArray(originHeader) ? originHeader[0] : originHeader
+  if (!origin) return true
+
+  const configured = cleanOrigin((process.env.APP_ORIGIN || '').trim())
+  const sameDeployment = cleanOrigin(requestOrigin(req))
+  const allowed = [configured, sameDeployment].filter(Boolean).includes(cleanOrigin(origin))
+  if (allowed) {
+    res.setHeader('Access-Control-Allow-Origin', origin)
+    res.setHeader('Vary', 'Origin')
+  }
+  return allowed
+}
+
+function secretsMatch(provided: string, expected: string) {
+  const providedBuffer = Buffer.from(provided)
+  const expectedBuffer = Buffer.from(expected)
+  return providedBuffer.length === expectedBuffer.length && timingSafeEqual(providedBuffer, expectedBuffer)
+}
+
+function parseCookies(req: VercelRequest) {
+  const header = req.headers.cookie || ''
+  return Object.fromEntries(header.split(';').map(part => {
+    const [key, ...value] = part.trim().split('=')
+    return [key, decodeURIComponent(value.join('='))]
+  }).filter(([key]) => key))
+}
+
+function sessionSignature(expires: string) {
+  const secret = (process.env.API_SECRET || '').trim()
+  return secret ? createHmac('sha256', secret).update(expires).digest('hex') : ''
+}
+
+function hasValidSession(req: VercelRequest) {
+  const token = parseCookies(req)[SESSION_COOKIE]
+  if (!token) return false
+  const [expires, signature] = token.split('.')
+  if (!expires || !signature || Number(expires) <= Date.now()) return false
+  return secretsMatch(signature, sessionSignature(expires))
+}
+
+function hasValidBearer(req: VercelRequest) {
+  const secret = (process.env.API_SECRET || '').trim()
+  if (!secret) return false
+  const authorization = req.headers.authorization
+  const value = Array.isArray(authorization) ? authorization[0] : authorization || ''
+  const match = value.match(/^Bearer\s+(.+)$/i)
+  return !!match && secretsMatch(match[1], secret)
+}
+
+function isAuthorized(req: VercelRequest) {
+  return hasValidSession(req) || hasValidBearer(req)
+}
+
+function authorizeMutation(req: VercelRequest, res: VercelResponse) {
+  const secret = (process.env.API_SECRET || '').trim()
+  if (!secret) {
+    res.status(503).json({ error:'Mutation authorization is not configured' })
+    return false
+  }
+  if (!isAuthorized(req)) {
+    res.setHeader('WWW-Authenticate', 'Bearer')
+    res.status(401).json({ error:'Unauthorized' })
+    return false
+  }
+  return true
+}
+
+function normalizeEvent(row: any) {
+  const stored = row?.data && typeof row.data === 'object' ? row.data : {}
+  return {
+    ts: row.ts || row.created_at,
+    from: row.agent_name || stored.from || 'unknown',
+    to: stored.to || 'system',
+    type: row.event_type || stored.type || 'unknown',
+    ...(stored.lead_id && { lead_id: stored.lead_id }),
+    payload: stored.payload !== undefined ? stored.payload : stored,
+  }
+}
+
+function isAgentTrigger(path: string, method: string) {
+  return method === 'POST' && (path === 'agents/run-all' || /^agents\/[^/]+\/run$/.test(path))
+}
+
+function isStaticRoute(path: string, method: string) {
+  return path === 'health' || (path === 'agents' && method === 'GET') || isAgentTrigger(path, method)
+}
+
+async function proxyAgentTrigger(path: string, req: VercelRequest, res: VercelResponse) {
+  const configuredUrl = (process.env.AGENT_WORKER_URL || '').trim()
+  if (!configuredUrl) {
+    return res.status(501).json({ error:'Agent execution is unavailable in this deployment; configure AGENT_WORKER_URL' })
+  }
+
+  let target: URL
+  try {
+    target = new URL(configuredUrl)
+    if (target.protocol !== 'https:' && !(process.env.NODE_ENV !== 'production' && target.protocol === 'http:')) throw new Error('Unsafe protocol')
+    target.username = ''
+    target.password = ''
+    target.pathname = `${target.pathname.replace(/\/+$/, '')}/api/${path}`
+    target.search = ''
+    target.hash = ''
+  } catch {
+    return res.status(503).json({ error:'Agent worker is not configured correctly' })
+  }
+
+  const workerSecret = (process.env.AGENT_WORKER_SECRET || process.env.API_SECRET || '').trim()
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 20_000)
+  try {
+    const response = await fetch(target, {
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'Authorization':`Bearer ${workerSecret}`,
+      },
+      body:JSON.stringify(req.body || {}),
+      signal:controller.signal,
+    })
+    const body = await response.text()
+    const contentType = response.headers.get('content-type')
+    if (contentType) res.setHeader('Content-Type', contentType)
+    return res.status(response.status).send(body)
+  } catch (error:any) {
+    const timedOut = error?.name === 'AbortError'
+    return res.status(timedOut ? 504 : 502).json({ error:timedOut ? 'Agent worker timed out' : 'Agent worker unavailable' })
+  } finally {
+    clearTimeout(timeout)
+  }
+}
 
 // ── Stripe helpers (inlined) ──
 const CACHE_TTL_MS = 30 * 60 * 1000
@@ -57,10 +215,12 @@ function matchStripeToLead(email: string, name: string, leads: any[]): any | nul
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,OPTIONS')
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
-  if (req.method === 'OPTIONS') return res.status(200).end()
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+  res.setHeader('Access-Control-Allow-Credentials', 'true')
+  res.setHeader('Vary', 'Origin')
+  if (!setCors(req, res)) return res.status(403).json({ error:'Origin not allowed' })
+  if (req.method === 'OPTIONS') return res.status(204).end()
 
   // Derive the route from the URL itself (robust across Vercel param shapes)
   const rawRoute = req.query.route
@@ -73,37 +233,119 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     slug = urlPath ? urlPath.split('/') : []
   }
   const path = slug.join('/')
-
-  // Debug: return env var + connection status for /api/health
-  if (path === 'health') {
-    let dbCheck = 'not_attempted'
-    if (supabaseReady) {
-      try {
-        const { error } = await supabase.from('leads').select('id').limit(1)
-        dbCheck = error ? `query_error: ${error.message}` : 'connected'
-      } catch (e: any) {
-        dbCheck = `exception: ${e?.message || e}`
-      }
-    }
-    return res.json({
-      status: supabaseReady ? 'ok' : 'missing_or_bad_env',
-      supabase_url_set: !!process.env.SUPABASE_URL,
-      supabase_url_preview: supabaseUrlValue ? supabaseUrlValue.slice(0, 30) + '...' : '(empty)',
-      supabase_key_set: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
-      stripe_key_set: !!process.env.STRIPE_SECRET_KEY,
-      init_error: initError,
-      db_check: dbCheck,
-      env_keys: Object.keys(process.env).filter(k => k.includes('SUPA') || k.includes('STRIPE')).sort()
-    })
-  }
   const method = req.method || 'GET'
 
+  if (path === 'session' && method === 'GET') {
+    const authRequired = !!process.env.DASHBOARD_PASSWORD
+    return res.json({ authenticated:!authRequired || isAuthorized(req), authRequired })
+  }
+
+  if (path === 'login' && method === 'POST') {
+    const password = (process.env.DASHBOARD_PASSWORD || '').trim()
+    const secret = (process.env.API_SECRET || '').trim()
+    if (!password || !secret) return res.status(503).json({ error:'Dashboard authentication is not configured' })
+    const provided = typeof req.body?.password === 'string' ? req.body.password : ''
+    if (!secretsMatch(provided, password)) return res.status(401).json({ error:'Invalid password' })
+    const expires = String(Date.now() + SESSION_TTL_SECONDS * 1000)
+    const secure = process.env.NODE_ENV === 'production' ? '; Secure' : ''
+    res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${expires}.${sessionSignature(expires)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL_SECONDS}${secure}`)
+    return res.json({ authenticated:true })
+  }
+
+  if (path === 'logout' && method === 'POST') {
+    res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`)
+    return res.json({ authenticated:false })
+  }
+
+  // Keep health output intentionally generic: never expose config names, values, or errors.
+  if (path === 'health') {
+    if (!supabaseReady) {
+      return res.status(503).json({ status:'degraded', database:'unavailable' })
+    }
+    try {
+      const { error } = await supabase.from('leads').select('id').limit(1)
+      if (error) return res.status(503).json({ status:'degraded', database:'unavailable' })
+      return res.json({ status:'ok', database:'connected' })
+    } catch {
+      return res.status(503).json({ status:'degraded', database:'unavailable' })
+    }
+  }
+
+  if (process.env.DASHBOARD_PASSWORD && !isAuthorized(req)) {
+    return res.status(401).json({ error:'Authentication required' })
+  }
+
+  // Static agent metadata does not require database connectivity.
+  if (path === 'agents' && method === 'GET') {
+    return res.json(AGENT_SCHEDULES)
+  }
+
+  // Vercel functions must delegate agent execution to a durable worker.
+  if (isAgentTrigger(path, method)) {
+    if (!authorizeMutation(req, res)) return
+    const agentId = slug[1]
+    if (path !== 'agents/run-all' && !AGENTS.includes(agentId as any)) {
+      return res.status(404).json({ error:'Agent not found' })
+    }
+    return proxyAgentTrigger(path, req, res)
+  }
+
+  const mutationRequiresAuth =
+    (method === 'PATCH' && slug[0] === 'leads' && slug.length === 2) ||
+    (method === 'POST' && path === 'stripe-crossref/upgrade') ||
+    (method === 'POST' && path === 'seed-from-stripe') ||
+    (method === 'POST' && path === 'admin/import')
+  if (mutationRequiresAuth && !authorizeMutation(req, res)) return
+
+  // Every remaining implemented route reads or writes Supabase.
+  if (!isStaticRoute(path, method) && !supabaseReady) {
+    return res.status(503).json({ error:'Data service unavailable' })
+  }
+
   try {
+    // POST /api/admin/import — protected migration bridge for local JSON data.
+    if (path === 'admin/import' && method === 'POST') {
+      if (!hasValidBearer(req)) return res.status(401).json({ error:'Bearer authorization required' })
+      const resource = req.body?.resource
+      const records = req.body?.records
+      if (!['leads','reports','events','calls'].includes(resource) || !Array.isArray(records) || records.length > 500) {
+        return res.status(400).json({ error:'Invalid migration payload' })
+      }
+      if (resource === 'leads') {
+        if (req.body?.replace === true) {
+          const { error } = await supabase.from('leads').delete().neq('id', '__migration_never__')
+          if (error) throw error
+        }
+        const { error } = await supabase.from('leads').upsert(records, { onConflict:'id' })
+        if (error) throw error
+      } else if (resource === 'reports') {
+        if (req.body?.replace === true) {
+          const { error } = await supabase.from('reports').delete().neq('filename', '__migration_never__')
+          if (error) throw error
+        }
+        const { error } = await supabase.from('reports').upsert(records, { onConflict:'filename' })
+        if (error) throw error
+      } else if (resource === 'calls') {
+        const { error } = await supabase.from('calls_cache').upsert(records, { onConflict:'id' })
+        if (error) throw error
+      } else {
+        if (req.body?.replace === true) {
+          const { error } = await supabase.from('agent_events').delete().gte('id', 0)
+          if (error) throw error
+        }
+        if (records.length) {
+          const { error } = await supabase.from('agent_events').insert(records)
+          if (error) throw error
+        }
+      }
+      return res.json({ ok:true, resource, processed:records.length })
+    }
+
     // GET /api/stats
     if (path === 'stats') {
       const [{ data: all, error }, { data: events }] = await Promise.all([
         supabase.from('leads').select('*'),
-        supabase.from('agent_events').select('agent_name,event_type,ts').eq('event_type','run_summary')
+        supabase.from('agent_events').select('agent_name,event_type,ts').eq('event_type','run_summary').order('ts',{ascending:false})
       ])
       if (error) throw error
       const leads = (all||[]).filter((l:any) => l.type !== 'client')
@@ -123,7 +365,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const agentHealth:Record<string,any> = {}
       for (const agent of AGENTS) {
         const runs = (events||[]).filter((e:any) => e.agent_name === agent)
-        const last = runs[runs.length-1]
+        const last = runs[0]
         agentHealth[agent] = { lastRun: last?.ts||null, runsToday: runs.filter((e:any) => new Date(e.ts).toDateString()===todayStr).length, status: last?(now-new Date(last.ts).getTime()<86400000?'ok':'stale'):'never' }
       }
       const proposalsOut = (all||[]).filter((l:any) => l.status==='proposal_sent'||PROPOSAL_KEYWORDS.some(kw=>((l.last_action||'')+' '+(l.notes||'')).toLowerCase().includes(kw))).length
@@ -178,7 +420,53 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const cutoff = new Date(Date.now()-hours*3600000).toISOString()
       const { data, error } = await supabase.from('agent_events').select('*').gte('ts',cutoff).order('ts',{ascending:false}).limit(200)
       if (error) throw error
-      return res.json(data||[])
+      return res.json((data||[]).map(normalizeEvent))
+    }
+
+    // GET /api/command-center
+    if (path === 'command-center' && method === 'GET') {
+      const cutoff = new Date(Date.now()-24*3600000).toISOString()
+      const { data, error } = await supabase.from('agent_events').select('*').order('ts',{ascending:false}).limit(1000)
+      if (error) throw error
+      const events = (data||[]).map(normalizeEvent)
+      const agents = AGENT_SCHEDULES.map(schedule => {
+        const agentEvents = events.filter((event:any) => event.from === schedule.id)
+        const lastEvent = agentEvents[0]
+        const lastSummary = agentEvents.find((event:any) => event.type === 'run_summary')
+        const runsLast24h = agentEvents.filter((event:any) => event.type === 'run_summary' && event.ts >= cutoff).length
+        const summaryHasErrors = Array.isArray(lastSummary?.payload?.errors) && lastSummary.payload.errors.length > 0
+        const latestIsError = ['error','run_error','failed'].includes(lastEvent?.type)
+        let status:'idle'|'running'|'error'|'offline' = 'idle'
+        if (lastEvent?.type === 'run_start') status = 'running'
+        else if (summaryHasErrors || lastSummary?.payload?.success === false || latestIsError) status = 'error'
+        else if (!lastEvent) status = 'offline'
+        return {
+          ...schedule,
+          lastRun:lastSummary?.ts||lastEvent?.ts||null,
+          lastSummary:lastSummary?.payload||null,
+          runsLast24h,
+          status,
+        }
+      })
+      const googleConfigured = !!process.env.GMAIL_SERVICE_ACCOUNT_JSON ||
+        !!(process.env.GMAIL_CLIENT_ID && process.env.GMAIL_CLIENT_SECRET && process.env.GMAIL_REFRESH_TOKEN)
+      return res.json({
+        agents,
+        recentEvents:events.slice(0,50),
+        system:{
+          uptime:Math.max(0,(Date.now()-STARTED_AT)/1000),
+          timezone:process.env.SCHEDULER_TIMEZONE||'America/New_York',
+          serverTime:new Date().toISOString(),
+          integrations:{
+            stripe:!!process.env.STRIPE_SECRET_KEY,
+            slack:!!process.env.SLACK_BOT_TOKEN,
+            gmail:googleConfigured,
+            calendar:googleConfigured,
+            fireflies:!!process.env.FIREFLIES_API_KEY,
+            openai:!!process.env.OPENAI_API_KEY,
+          },
+        },
+      })
     }
 
     // GET /api/reports
@@ -302,10 +590,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.json({ enabled:true,total:transactions.length,results:filtered })
     }
 
-    // POST or GET /api/seed-from-stripe?key=govcon-seed
-    // One-time: reconstruct client roster from Stripe payers into Supabase
-    if (path === 'seed-from-stripe') {
-      if ((req.query.key as string) !== 'govcon-seed') return res.status(403).json({ error: 'Forbidden — add ?key=govcon-seed' })
+    // POST /api/seed-from-stripe (protected by Bearer API_SECRET)
+    // One-time: reconstruct client roster from Stripe payers into Supabase.
+    if (path === 'seed-from-stripe' && method === 'POST') {
       if (!getStripe()) return res.status(400).json({ error: 'Stripe not configured' })
 
       const now = new Date()
@@ -360,10 +647,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       return res.json({ ok: true, stripePayers: rows.length, upsertedClients: inserted, totalChargesScanned: allCharges.length })
     }
+    if (path === 'seed-from-stripe') return res.status(405).json({ error:'Method not allowed' })
 
-    res.status(404).json({ error:'Not found', debug: { path, slug, rawRoute, url: req.url } })
+    res.status(404).json({ error:'Not found' })
   } catch (err:any) {
     console.error(err)
-    res.status(500).json({ error: err.message })
+    res.status(500).json({ error:process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message })
   }
 }

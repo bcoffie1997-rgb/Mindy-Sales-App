@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { DollarSign, TrendingUp, TrendingDown, CreditCard, RefreshCw, ArrowUpRight, Users, FileText, Search, ChevronDown, ChevronUp, AlertCircle } from 'lucide-react'
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
+import { apiFetch, getErrorMessage } from '../lib/api'
 
 interface RevenueData {
   enabled: boolean
@@ -61,6 +62,37 @@ interface PlanGroup {
   members: { name: string; email: string; status: string; client_match: string | null }[]
 }
 
+function parseRevenueData(value: unknown): RevenueData {
+  if (!value || typeof value !== 'object') throw new Error('Revenue response was invalid.')
+  const data = value as Partial<RevenueData>
+  if (typeof data.enabled !== 'boolean') throw new Error('Revenue response is missing its enabled status.')
+  if (!data.enabled) return { ...data, enabled: false, recentTransactions: [], dailyRevenue: {}, monthlyRevenue: [], productGroups: [] } as RevenueData
+  if (!Array.isArray(data.recentTransactions) || !Array.isArray(data.monthlyRevenue) || !Array.isArray(data.productGroups) || !data.dailyRevenue || typeof data.dailyRevenue !== 'object') {
+    throw new Error('Revenue response is missing transaction or chart data.')
+  }
+  return {
+    ...data,
+    recentTransactions: data.recentTransactions.filter(item => item && typeof item === 'object'),
+    monthlyRevenue: data.monthlyRevenue.filter(item => item && typeof item.month === 'string'),
+    productGroups: data.productGroups
+      .filter(item => item && typeof item === 'object')
+      .map(item => ({ ...item, customers: Array.isArray(item.customers) ? item.customers : [] })),
+  } as RevenueData
+}
+
+function parseSubsData(value: unknown): SubsData {
+  if (!value || typeof value !== 'object') throw new Error('Subscriptions response was invalid.')
+  const data = value as Partial<SubsData>
+  if (!Array.isArray(data.subscriptions) || !Array.isArray(data.planGroups)) throw new Error('Subscriptions response is missing subscription lists.')
+  return {
+    ...data,
+    subscriptions: data.subscriptions.filter(item => item && typeof item === 'object'),
+    planGroups: data.planGroups
+      .filter(item => item && typeof item === 'object')
+      .map(item => ({ ...item, members: Array.isArray(item.members) ? item.members : [] })),
+  } as SubsData
+}
+
 function fmt(n: number) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(n)
 }
@@ -80,7 +112,10 @@ export default function Revenue() {
   const [subs, setSubs] = useState<SubsData | null>(null)
   const [report, setReport] = useState<ReportData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [subsError, setSubsError] = useState<string | null>(null)
   const [showReport, setShowReport] = useState(false)
+  const [reportError, setReportError] = useState<string | null>(null)
   const [expandedPlan, setExpandedPlan] = useState<string | null>(null)
   const [expandedProduct, setExpandedProduct] = useState<string | null>(null)
 
@@ -89,71 +124,135 @@ export default function Revenue() {
   const [txResults, setTxResults] = useState<any[] | null>(null)
   const [txTotal, setTxTotal] = useState(0)
   const [txLoading, setTxLoading] = useState(false)
+  const [txError, setTxError] = useState<string | null>(null)
 
   // Cross-reference
   const [crossRef, setCrossRef] = useState<any>(null)
   const [showCrossRef, setShowCrossRef] = useState(false)
   const [upgrading, setUpgrading] = useState<string[]>([])
+  const [crossRefError, setCrossRefError] = useState<string | null>(null)
 
-  const load = () => {
+  const load = async () => {
     setLoading(true)
-    fetch('/api/revenue').then(r => r.json()).then(rev => { setRevenue(rev); setLoading(false) }).catch(() => setLoading(false))
-    fetch('/api/subscriptions').then(r => r.json()).then(setSubs).catch(() => {})
+    setError(null)
+    const [revenueResult, subsResult] = await Promise.allSettled([
+      apiFetch<unknown>('/api/revenue'),
+      apiFetch<unknown>('/api/subscriptions'),
+    ])
+    if (revenueResult.status === 'fulfilled') {
+      try {
+        setRevenue(parseRevenueData(revenueResult.value))
+      } catch (error) {
+        setError(getErrorMessage(error, 'Failed to load revenue.'))
+      }
+    } else {
+      setError(getErrorMessage(revenueResult.reason, 'Failed to load revenue.'))
+    }
+    if (subsResult.status === 'fulfilled') {
+      try {
+        setSubs(parseSubsData(subsResult.value))
+        setSubsError(null)
+      } catch (error) {
+        setSubsError(getErrorMessage(error, 'Failed to load subscriptions.'))
+      }
+    } else {
+      setSubsError(getErrorMessage(subsResult.reason, 'Failed to load subscriptions.'))
+    }
+    setLoading(false)
   }
 
-  const loadReport = () => {
+  const loadReport = async () => {
     setShowReport(true)
     if (!report) {
-      fetch('/api/revenue/report').then(r => r.json()).then(setReport).catch(() => {})
+      setReportError(null)
+      try {
+        const data = await apiFetch<unknown>('/api/revenue/report')
+        if (!data || typeof data !== 'object' || !(data as ReportData).report || typeof (data as ReportData).report.summary !== 'object' || !Array.isArray((data as ReportData).report.monthlyTrend) || !Array.isArray((data as ReportData).report.clientMatches)) {
+          throw new Error('Revenue report response was incomplete.')
+        }
+        setReport(data as ReportData)
+      } catch (error) {
+        setReportError(getErrorMessage(error, 'Failed to load revenue report.'))
+      }
     }
   }
 
-  const searchTransactions = (q: string) => {
+  const searchTransactions = async (q: string) => {
     setTxSearch(q)
     setTxLoading(true)
-    fetch(`/api/transactions?q=${encodeURIComponent(q)}`).then(r => r.json()).then(data => {
-      setTxResults(data.results || [])
-      setTxTotal(data.total || 0)
+    setTxError(null)
+    try {
+      const data = await apiFetch<unknown>(`/api/transactions?q=${encodeURIComponent(q)}`)
+      if (!data || typeof data !== 'object' || !Array.isArray((data as { results?: unknown }).results)) throw new Error('Transaction response was invalid.')
+      setTxResults((data as { results: any[] }).results)
+      setTxTotal(Number((data as { total?: unknown }).total) || 0)
+    } catch (error) {
+      setTxError(getErrorMessage(error, 'Failed to search transactions.'))
+    } finally {
       setTxLoading(false)
-    }).catch(() => setTxLoading(false))
-  }
-
-  const loadCrossRef = () => {
-    setShowCrossRef(true)
-    if (!crossRef) {
-      fetch('/api/stripe-crossref').then(r => r.json()).then(setCrossRef).catch(() => {})
     }
   }
 
-  const upgradeLead = (leadId: string) => {
-    setUpgrading(prev => [...prev, leadId])
-    fetch('/api/stripe-crossref/upgrade', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ leadIds: [leadId] }),
-    }).then(r => r.json()).then(() => {
-      setCrossRef(null)
-      fetch('/api/stripe-crossref').then(r => r.json()).then(setCrossRef)
-      setUpgrading(prev => prev.filter(id => id !== leadId))
-    }).catch(() => setUpgrading(prev => prev.filter(id => id !== leadId)))
+  const loadCrossRef = async (force = false) => {
+    setShowCrossRef(true)
+    if (!crossRef || force) {
+      setCrossRefError(null)
+      try {
+        const data = await apiFetch<any>('/api/stripe-crossref')
+        if (!data || typeof data !== 'object' || !Array.isArray(data.needsUpgrade) || !Array.isArray(data.missingFromCrm)) {
+          throw new Error('Cross-reference response was incomplete.')
+        }
+        setCrossRef({
+          ...data,
+          needsUpgrade: data.needsUpgrade.filter((item: any) => item && typeof item === 'object' && item.lead && typeof item.lead.id === 'string'),
+          missingFromCrm: data.missingFromCrm.filter((item: any) => item && typeof item === 'object'),
+        })
+      } catch (error) {
+        setCrossRefError(getErrorMessage(error, 'Failed to analyze Stripe customers.'))
+      }
+    }
   }
 
-  const upgradeAll = (leadIds: string[]) => {
-    setUpgrading(leadIds)
-    fetch('/api/stripe-crossref/upgrade', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ leadIds }),
-    }).then(r => r.json()).then(() => {
+  const upgradeLead = async (leadId: string) => {
+    setUpgrading(prev => [...prev, leadId])
+    setCrossRefError(null)
+    try {
+      await apiFetch('/api/stripe-crossref/upgrade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leadIds: [leadId] }),
+      })
       setCrossRef(null)
-      fetch('/api/stripe-crossref').then(r => r.json()).then(setCrossRef)
+      await loadCrossRef(true)
+    } catch (error) {
+      setCrossRefError(getErrorMessage(error, 'Failed to upgrade lead.'))
+    } finally {
+      setUpgrading(prev => prev.filter(id => id !== leadId))
+    }
+  }
+
+  const upgradeAll = async (leadIds: string[]) => {
+    setUpgrading(leadIds)
+    setCrossRefError(null)
+    try {
+      await apiFetch('/api/stripe-crossref/upgrade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leadIds }),
+      })
+      setCrossRef(null)
+      await loadCrossRef(true)
+    } catch (error) {
+      setCrossRefError(getErrorMessage(error, 'Failed to upgrade leads.'))
+    } finally {
       setUpgrading([])
-    }).catch(() => setUpgrading([]))
+    }
   }
 
   useEffect(() => { load() }, [])
 
   if (loading && !revenue) return <div className="p-8 text-slate-400">Loading Stripe data...</div>
+  if (error && !revenue) return <div className="p-8 text-red-300">{error}</div>
 
   if (revenue?.error) {
     return (
@@ -200,6 +299,9 @@ export default function Revenue() {
           </button>
         </div>
       </div>
+
+      {error && <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">{error}</div>}
+      {subsError && <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-300">{subsError}</div>}
 
       {/* Metric Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
@@ -252,7 +354,9 @@ export default function Revenue() {
         <div className="card p-5">
           <h3 className="text-sm font-semibold text-slate-200 mb-4">Revenue by Product</h3>
           <div className="space-y-2 max-h-[260px] overflow-y-auto">
-            {revenue.productGroups.map(pg => (
+            {revenue.productGroups.length === 0 ? (
+              <div className="h-[220px] flex items-center justify-center text-slate-500 text-sm">No product revenue yet</div>
+            ) : revenue.productGroups.map(pg => (
               <div key={pg.name} className="rounded-xl border border-white/10 bg-white/[0.03]">
                 <div className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-white/[0.05] rounded-xl" onClick={() => setExpandedProduct(expandedProduct === pg.name ? null : pg.name)}>
                   <div className="flex-1 min-w-0">
@@ -343,7 +447,7 @@ export default function Revenue() {
             <h3 className="text-sm font-semibold text-slate-200">Transaction History</h3>
             <p className="text-xs text-slate-500">Search all {revenue.totalCharges} transactions from the past year</p>
           </div>
-          <button onClick={loadCrossRef} className="btn-secondary text-xs">
+          <button onClick={() => loadCrossRef()} className="btn-secondary text-xs">
             <Users className="w-3 h-3" /> Cross-Reference Clients
           </button>
         </div>
@@ -357,6 +461,11 @@ export default function Revenue() {
           />
         </div>
         <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+          {txError ? (
+            <div className="py-8 text-center text-red-300 text-sm">{txError}</div>
+          ) : txLoading ? (
+            <div className="py-8 text-center text-slate-400 text-sm">Searching transactions...</div>
+          ) : (
           <table className="w-full text-sm">
             <thead className="sticky top-0 bg-slate-900/95 backdrop-blur-sm z-10">
               <tr className="text-left text-slate-400 border-b border-white/10">
@@ -391,8 +500,12 @@ export default function Revenue() {
               {txResults && txResults.length === 0 && (
                 <tr><td colSpan={5} className="py-8 text-center text-slate-500 text-sm">No transactions match "{txSearch}"</td></tr>
               )}
+              {!txResults && revenue.recentTransactions.length === 0 && (
+                <tr><td colSpan={5} className="py-8 text-center text-slate-500 text-sm">No recent transactions</td></tr>
+              )}
             </tbody>
           </table>
+          )}
           {txResults && txResults.length > 100 && (
             <p className="text-xs text-slate-500 mt-2 text-center">Showing first 100 of {txResults.length} results</p>
           )}
@@ -411,9 +524,10 @@ export default function Revenue() {
               <button onClick={() => setShowCrossRef(false)} className="text-slate-400 hover:text-white text-2xl transition-colors">&times;</button>
             </div>
             {!crossRef ? (
-              <div className="p-12 text-center text-slate-400">Analyzing...</div>
+              <div className={`p-12 text-center ${crossRefError ? 'text-red-300' : 'text-slate-400'}`}>{crossRefError || 'Analyzing...'}</div>
             ) : (
               <div className="p-6 space-y-6">
+                {crossRefError && <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">{crossRefError}</div>}
                 {/* Summary */}
                 <div className="grid grid-cols-4 gap-3">
                   <div className="bg-white/5 rounded-xl p-3 text-center border border-white/5">
@@ -513,7 +627,7 @@ export default function Revenue() {
               <button onClick={() => setShowReport(false)} className="text-slate-400 hover:text-white text-2xl transition-colors">&times;</button>
             </div>
             {!report ? (
-              <div className="p-12 text-center text-slate-400">Loading report...</div>
+              <div className={`p-12 text-center ${reportError ? 'text-red-300' : 'text-slate-400'}`}>{reportError || 'Loading report...'}</div>
             ) : report.error ? (
               <div className="p-6 text-red-300">{report.error}</div>
             ) : (

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Search, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react'
+import { apiFetch, getErrorMessage } from '../lib/api'
 
 interface Lead {
   id: string
@@ -42,8 +43,21 @@ export default function Leads() {
   const [sortKey, setSortKey] = useState<SortKey>('last_action_date')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [editing, setEditing] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
-  const load = () => fetch('/api/leads-only').then(r => r.json()).then(setLeads).catch(() => {})
+  const load = async () => {
+    try {
+      setError(null)
+      const data = await apiFetch<unknown>('/api/leads-only')
+      if (!Array.isArray(data)) throw new Error('Leads response was not a list.')
+      setLeads(data.filter(item => item && typeof item === 'object' && typeof item.id === 'string') as Lead[])
+    } catch (error) {
+      setError(getErrorMessage(error, 'Failed to load leads.'))
+    } finally {
+      setLoading(false)
+    }
+  }
 
   useEffect(() => { load() }, [])
 
@@ -75,13 +89,18 @@ export default function Leads() {
   }
 
   const updateLead = async (id: string, updates: Partial<Lead>) => {
-    await fetch(`/api/leads/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates),
-    })
-    setEditing(null)
-    load()
+    try {
+      setError(null)
+      await apiFetch(`/api/leads/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      })
+      setEditing(null)
+      await load()
+    } catch (error) {
+      setError(getErrorMessage(error, 'Failed to update lead.'))
+    }
   }
 
   const statuses = [...new Set(leads.map(l => l.status))].sort()
@@ -118,6 +137,11 @@ export default function Leads() {
 
       {/* Table */}
       <div className="card overflow-x-auto">
+        {error ? (
+          <div className="px-4 py-12 text-center text-red-300">{error}</div>
+        ) : loading ? (
+          <div className="px-4 py-12 text-center text-slate-400">Loading leads...</div>
+        ) : (
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-white/10">
@@ -197,6 +221,7 @@ export default function Leads() {
             )}
           </tbody>
         </table>
+        )}
       </div>
     </div>
   )

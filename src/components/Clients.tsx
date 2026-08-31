@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Search, DollarSign, Crown, Star, ShieldCheck } from 'lucide-react'
+import { apiFetch, getErrorMessage } from '../lib/api'
 
 interface Client {
   id: string
@@ -42,9 +43,17 @@ export default function Clients() {
   const [clients, setClients] = useState<Client[]>([])
   const [search, setSearch] = useState('')
   const [tierFilter, setTierFilter] = useState('all')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    fetch('/api/clients').then(r => r.json()).then(setClients).catch(() => {})
+    apiFetch<unknown>('/api/clients')
+      .then(data => {
+        if (!Array.isArray(data)) throw new Error('Clients response was not a list.')
+        setClients(data.filter(item => item && typeof item === 'object' && typeof item.id === 'string') as Client[])
+      })
+      .catch(error => setError(getErrorMessage(error, 'Failed to load clients.')))
+      .finally(() => setLoading(false))
   }, [])
 
   const filtered = clients.filter(c => {
@@ -106,6 +115,11 @@ export default function Clients() {
 
       {/* Table */}
       <div className="card overflow-x-auto">
+        {error ? (
+          <div className="px-4 py-12 text-center text-red-300">{error}</div>
+        ) : loading ? (
+          <div className="px-4 py-12 text-center text-slate-400">Loading clients...</div>
+        ) : (
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-white/10">
@@ -163,6 +177,7 @@ export default function Clients() {
             )}
           </tbody>
         </table>
+        )}
       </div>
     </div>
   )

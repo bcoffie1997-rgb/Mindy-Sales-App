@@ -11,8 +11,9 @@ export function loadConfig(dataDir: string) {
   }
 
   // Override secrets from environment
-  if (process.env.STRIPE_API_KEY) {
-    config.stripe = { ...(config.stripe || {}), api_key: process.env.STRIPE_API_KEY, enabled: true }
+  const stripeSecretKey = process.env.STRIPE_SECRET_KEY || process.env.STRIPE_API_KEY
+  if (stripeSecretKey) {
+    config.stripe = { ...(config.stripe || {}), api_key: stripeSecretKey, enabled: true }
   }
   if (process.env.SLACK_BOT_TOKEN) {
     config.slack = {

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Phone, Clock, MapPin, User, Building, MessageSquare, ChevronDown, ChevronRight, Star, UserCheck, ExternalLink, Calendar } from 'lucide-react'
+import { apiFetch, getErrorMessage } from '../lib/api'
 
 interface CallEvent {
   event_id: string
@@ -34,6 +35,27 @@ interface CallsData {
   today: CallEvent[]
   tomorrow: CallEvent[]
   this_week: CallEvent[]
+}
+
+function parseCallsData(value: unknown): CallsData {
+  if (!value || typeof value !== 'object') throw new Error('Calls response was invalid.')
+  const data = value as Partial<CallsData>
+  if (!Array.isArray(data.today) || !Array.isArray(data.tomorrow) || !Array.isArray(data.this_week)) {
+    throw new Error('Calls response is missing schedule lists.')
+  }
+  const normalize = (calls: CallEvent[]) => calls
+    .filter(call => call && typeof call.event_id === 'string' && typeof call.start === 'string' && typeof call.end === 'string')
+    .map(call => ({
+      ...call,
+      attendees: Array.isArray(call.attendees) ? call.attendees.filter(attendee => attendee && typeof attendee === 'object') : [],
+      lead_match: call.lead_match && typeof call.lead_match === 'object' ? call.lead_match : null,
+    }))
+  return {
+    generated_at: typeof data.generated_at === 'string' ? data.generated_at : null,
+    today: normalize(data.today as CallEvent[]),
+    tomorrow: normalize(data.tomorrow as CallEvent[]),
+    this_week: normalize(data.this_week as CallEvent[]),
+  }
 }
 
 const SCORE_COLORS: Record<string, string> = {
@@ -195,12 +217,23 @@ function CallCard({ call }: { call: CallEvent }) {
 export default function TodayCalls() {
   const [data, setData] = useState<CallsData>({ generated_at: null, today: [], tomorrow: [], this_week: [] })
   const [view, setView] = useState<'today' | 'tomorrow' | 'week'>('today')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    fetch('/api/calls').then(r => r.json()).then(setData).catch(() => {})
-    const interval = setInterval(() => {
-      fetch('/api/calls').then(r => r.json()).then(setData).catch(() => {})
-    }, 120000) // refresh every 2 min
+    const load = async () => {
+      try {
+        const result = parseCallsData(await apiFetch<unknown>('/api/calls'))
+        setData(result)
+        setError(null)
+      } catch (error) {
+        setError(getErrorMessage(error, 'Failed to load calls.'))
+      } finally {
+        setLoading(false)
+      }
+    }
+    load()
+    const interval = setInterval(load, 120000) // refresh every 2 min
     return () => clearInterval(interval)
   }, [])
 
@@ -243,7 +276,11 @@ export default function TodayCalls() {
         <p className="text-xs text-slate-500">Last updated: {new Date(data.generated_at).toLocaleString('en-US', { timeZone: 'America/New_York' })}</p>
       )}
 
-      {view === 'week' ? (
+      {error && !data.generated_at ? (
+        <div className="card p-12 text-center text-red-300">{error}</div>
+      ) : loading ? (
+        <div className="card p-12 text-center text-slate-400">Loading calls...</div>
+      ) : view === 'week' ? (
         Object.keys(weekByDay).length === 0 ? (
           <EmptyState />
         ) : (

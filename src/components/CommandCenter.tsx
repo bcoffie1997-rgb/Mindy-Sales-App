@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Terminal, Play, RotateCw, Clock, Activity, Zap, Server, CheckCircle2, XCircle, AlertCircle, Circle } from 'lucide-react'
+import { apiFetch, getErrorMessage } from '../lib/api'
 
 interface AgentStatus {
   id: string
@@ -20,6 +21,29 @@ interface CommandCenterData {
     timezone: string
     serverTime: string
     integrations: Record<string, boolean>
+  }
+}
+
+function parseCommandCenter(value: unknown): CommandCenterData {
+  if (!value || typeof value !== 'object') throw new Error('Command center response was invalid.')
+  const data = value as Partial<CommandCenterData>
+  if (!Array.isArray(data.agents) || !data.system || typeof data.system !== 'object') {
+    throw new Error('Command center response is missing system data.')
+  }
+  const system = data.system as CommandCenterData['system']
+  if (!system.integrations || typeof system.integrations !== 'object') {
+    throw new Error('Command center response is missing integrations.')
+  }
+  const validStatuses = new Set(['idle', 'running', 'error', 'offline'])
+  return {
+    agents: data.agents.filter(agent => agent && typeof agent.id === 'string' && validStatuses.has(agent.status)),
+    recentEvents: Array.isArray(data.recentEvents) ? data.recentEvents.filter(event => event && typeof event === 'object') : [],
+    system: {
+      uptime: Number(system.uptime) || 0,
+      timezone: typeof system.timezone === 'string' ? system.timezone : 'Unknown',
+      serverTime: typeof system.serverTime === 'string' ? system.serverTime : new Date().toISOString(),
+      integrations: system.integrations,
+    },
   }
 }
 
@@ -73,14 +97,14 @@ export default function CommandCenter() {
   const [data, setData] = useState<CommandCenterData | null>(null)
   const [loading, setLoading] = useState(true)
   const [runningAgent, setRunningAgent] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   const fetchData = async () => {
     try {
-      const res = await fetch('/api/command-center')
-      const json = await res.json()
-      setData(json)
+      setData(parseCommandCenter(await apiFetch<unknown>('/api/command-center')))
+      setError(null)
     } catch (err) {
-      console.error('Failed to load command center', err)
+      setError(getErrorMessage(err, 'Failed to load command center.'))
     } finally {
       setLoading(false)
     }
@@ -95,10 +119,11 @@ export default function CommandCenter() {
   const runAgent = async (id: string, name: string) => {
     setRunningAgent(id)
     try {
-      const res = await fetch(`/api/agents/${id}/run`, { method: 'POST' })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setError(null)
+      await apiFetch(`/api/agents/${id}/run`, { method: 'POST' })
       await fetchData()
     } catch (err) {
+      setError(getErrorMessage(err, `Failed to run ${name}.`))
       alert(`Failed to run ${name}`)
     } finally {
       setRunningAgent(null)
@@ -108,10 +133,11 @@ export default function CommandCenter() {
   const runAllAgents = async () => {
     setRunningAgent('all')
     try {
-      const res = await fetch('/api/agents/run-all', { method: 'POST' })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setError(null)
+      await apiFetch('/api/agents/run-all', { method: 'POST' })
       await fetchData()
     } catch (err) {
+      setError(getErrorMessage(err, 'Failed to run all agents.'))
       alert('Failed to run all agents')
     } finally {
       setRunningAgent(null)
@@ -119,7 +145,7 @@ export default function CommandCenter() {
   }
 
   if (loading) return <div className="p-8 text-slate-400">Loading command center...</div>
-  if (!data) return <div className="p-8 text-red-400">Failed to load command center.</div>
+  if (!data) return <div className="p-8 text-red-400">{error || 'Failed to load command center.'}</div>
 
   return (
     <div className="p-6 space-y-6">
@@ -146,6 +172,8 @@ export default function CommandCenter() {
           </button>
         </div>
       </div>
+
+      {error && <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">{error}</div>}
 
       {/* System Status */}
       <div className="card p-5">
@@ -189,7 +217,9 @@ export default function CommandCenter() {
       </div>
 
       {/* Agent Grid */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+      {data.agents.length === 0 ? (
+        <div className="card p-12 text-center text-slate-500">No agents are configured.</div>
+      ) : <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         {data.agents.map(agent => {
           const StatusIcon = STATUS_ICONS[agent.status]
           return (
@@ -241,7 +271,7 @@ export default function CommandCenter() {
             </div>
           )
         })}
-      </div>
+      </div>}
 
       {/* Recent Events */}
       <div className="card p-5">
