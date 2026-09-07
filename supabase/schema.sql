@@ -148,3 +148,14 @@ CREATE INDEX IF NOT EXISTS tasks_status_idx ON tasks(status);
 
 ALTER TABLE tasks        DISABLE ROW LEVEL SECURITY;
 ALTER TABLE team_members DISABLE ROW LEVEL SECURITY;
+
+-- Team documents: shared links/notes on the Team tab
+CREATE TABLE IF NOT EXISTS team_documents (
+  id BIGSERIAL PRIMARY KEY,
+  title TEXT NOT NULL,
+  url TEXT,
+  content TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE team_documents DISABLE ROW LEVEL SECURITY;

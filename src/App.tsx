@@ -11,7 +11,7 @@ import CommandCenter from './components/CommandCenter'
 import DetailView from './components/DetailView'
 
 const navItems = [
-  { to: '/', icon: ListTodo, label: 'Tasks' },
+  { to: '/', icon: ListTodo, label: 'Team Dash' },
   { to: '/manage', icon: Building2, label: 'BD / Consulting' },
   { to: '/clients', icon: UserCheck, label: 'Clients / Revenue' },
   { to: '/leads', icon: Users, label: 'Leads' },

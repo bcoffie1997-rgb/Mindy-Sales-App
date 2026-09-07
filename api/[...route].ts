@@ -25,6 +25,33 @@ const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || ''
 const SESSION_SECRET = process.env.DASHBOARD_SESSION_SECRET || DASHBOARD_PASSWORD
 const SESSION_COOKIE = 'govcon_dashboard_session'
 
+// ── Slack notifications (optional; silent no-op until SLACK_WEBHOOK_URL is set) ──
+const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL || ''
+async function notifySlack(text: string) {
+  if (!SLACK_WEBHOOK_URL) return
+  try {
+    await fetch(SLACK_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    })
+  } catch { /* notifications must never break the API */ }
+}
+
+// Automatic priority: due within 3 days → high, within 7 days → medium, otherwise none
+function autoPriority(due: string): string {
+  const today = new Date().toISOString().slice(0, 10)
+  const days = Math.round((new Date(due + 'T00:00:00Z').getTime() - new Date(today + 'T00:00:00Z').getTime()) / 86400000)
+  if (days <= 3) return 'high'
+  if (days <= 7) return 'medium'
+  return 'none'
+}
+
+function taskPriority(task: any): string {
+  if (task.due_date && task.status !== 'done') return autoPriority(task.due_date)
+  return task.priority || 'none'
+}
+
 function sessionToken() {
   return createHmac('sha256', SESSION_SECRET).update('authenticated-dashboard-session-v1').digest('hex')
 }
@@ -174,9 +201,59 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
   }
 
+  // Vercel Cron: Monday digest of open tasks due this week, posted to Slack.
+  // Vercel automatically sends Authorization: Bearer $CRON_SECRET when CRON_SECRET is set.
+  if (path === 'tasks-digest' && method === 'GET') {
+    const cronSecret = process.env.CRON_SECRET
+    if (cronSecret && req.headers.authorization !== `Bearer ${cronSecret}`) {
+      return res.status(401).json({ error: 'Unauthorized' })
+    }
+    if (!supabaseReady) return res.status(503).json({ error: 'Database unavailable' })
+    try {
+      const today = new Date().toISOString().slice(0, 10)
+      const weekEnd = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10)
+
+      // Daily: recalculate automatic priorities; ping when a task becomes high priority
+      const { data: open, error: openErr } = await supabase.from('tasks').select('*')
+        .neq('status', 'done').not('due_date', 'is', null)
+      if (openErr) throw openErr
+      let bumped = 0
+      for (const t of open || []) {
+        const p = autoPriority(t.due_date)
+        if (p !== t.priority) {
+          await supabase.from('tasks').update({ priority: p }).eq('id', t.id)
+          if (p === 'high') {
+            bumped++
+            await notifySlack(`🔥 Now HIGH priority (due ${t.due_date}): *${t.title}*${t.assignee ? ` — ${t.assignee}` : ''}`)
+          }
+        }
+      }
+
+      // Mondays: post the weekly digest
+      let digestItems = null
+      if (new Date().getUTCDay() === 1) {
+        const { data: due, error } = await supabase.from('tasks').select('*')
+          .neq('status', 'done').not('due_date', 'is', null).lte('due_date', weekEnd).order('due_date', { ascending: true })
+        if (error) throw error
+        const lines = (due || []).map((t: any) => {
+          const overdue = t.due_date < today ? '⚠️ ' : ''
+          const who = t.assignee ? ` (${t.assignee})` : ''
+          return `• ${overdue}${t.due_date} — ${t.title}${who}`
+        })
+        digestItems = lines.length
+        const text = lines.length
+          ? `🗓 *Weekly task digest* — ${lines.length} open item${lines.length === 1 ? '' : 's'} due this week:\n${lines.join('\n')}`
+          : '🗓 *Weekly task digest* — nothing due this week. 🎉'
+        await notifySlack(text)
+      }
+      return res.json({ ok: true, posted: !!SLACK_WEBHOOK_URL, bumpedToHigh: bumped, digestItems })
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message })
+    }
+  }
+
   if (!isAuthenticated(req)) return res.status(401).json({ error: 'Authentication required' })
   if (!supabaseReady) return res.status(503).json({ error: 'Database unavailable' })
-
   try {
     // GET /api/stats
     if (path === 'stats') {
@@ -860,7 +937,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
         throw error
       }
-      return res.json(data || [])
+      return res.json((data || []).map((t: any) => ({ ...t, priority: taskPriority(t) })))
     }
     // POST /api/tasks
     if (path === 'tasks' && method === 'POST') {
@@ -871,12 +948,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         title,
         description: typeof b.description === 'string' ? b.description : null,
         assignee: typeof b.assignee === 'string' && b.assignee.trim() ? b.assignee.trim() : null,
-        priority: ['low', 'medium', 'high'].includes(b.priority) ? b.priority : 'medium',
+        priority: ['low', 'medium', 'high', 'none'].includes(b.priority) ? b.priority : 'none',
         due_date: typeof b.due_date === 'string' && b.due_date ? b.due_date : null,
         status: ['todo', 'in_progress', 'done', 'reminder'].includes(b.status) ? b.status : 'todo',
       }
+      if (row.due_date && row.status !== 'done') row.priority = autoPriority(row.due_date)
       const { data, error } = await supabase.from('tasks').insert(row).select().single()
       if (error) throw error
+      const bits = [row.assignee ? `→ ${row.assignee}` : '→ Team', row.due_date ? `due ${row.due_date}` : null].filter(Boolean).join(', ')
+      if (data.priority === 'high' && data.assignee) {
+        await notifySlack(`🔥 New HIGH priority task for *${data.assignee}*: *${data.title}* (due ${data.due_date})`)
+      } else {
+        await notifySlack(`📋 New task: *${data.title}* (${bits})`)
+      }
       return res.json(data)
     }
     // PATCH /api/tasks  { id, ...fields }
@@ -888,7 +972,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (typeof b.title === 'string' && b.title.trim()) updates.title = b.title.trim()
       if (typeof b.description === 'string' || b.description === null) updates.description = b.description
       if (typeof b.assignee === 'string' || b.assignee === null) updates.assignee = b.assignee || null
-      if (['low', 'medium', 'high'].includes(b.priority)) updates.priority = b.priority
+      if (['low', 'medium', 'high', 'none'].includes(b.priority)) updates.priority = b.priority
       if (typeof b.due_date === 'string' || b.due_date === null) updates.due_date = b.due_date || null
       if (typeof b.sort_order === 'number') updates.sort_order = b.sort_order
       if (['todo', 'in_progress', 'done', 'reminder'].includes(b.status)) {
@@ -897,6 +981,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       const { data, error } = await supabase.from('tasks').update(updates).eq('id', id).select().single()
       if (error) throw error
+      // Due date set/changed → priority follows the automatic rules
+      if (updates.due_date !== undefined && data.status !== 'done') {
+        const p = autoPriority(data.due_date || '')
+        if (data.due_date && p !== data.priority) {
+          await supabase.from('tasks').update({ priority: p }).eq('id', id)
+          data.priority = p
+        }
+      }
+      if (updates.status === 'done') {
+        await notifySlack(`✅ Done: *${data.title}*${data.assignee ? ` — ${data.assignee}` : ''}`)
+      } else if (data.priority === 'high' && data.assignee && (updates.assignee !== undefined || updates.due_date)) {
+        await notifySlack(`🔥 HIGH priority task for *${data.assignee}*: *${data.title}* (due ${data.due_date})`)
+      }
       return res.json(data)
     }
     // DELETE /api/tasks?id=
@@ -904,6 +1001,39 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const id = Number(req.query.id)
       if (!id) return res.status(400).json({ error: 'Task id is required' })
       const { error } = await supabase.from('tasks').delete().eq('id', id)
+      if (error) throw error
+      return res.json({ ok: true })
+    }
+
+    // GET /api/team-documents
+    if (path === 'team-documents' && method === 'GET') {
+      const { data, error } = await supabase.from('team_documents').select('*').order('created_at', { ascending: false })
+      if (error) {
+        if (error.code === '42P01' || error.code === 'PGRST205' || /does not exist|schema cache/i.test(error.message || '')) {
+          return res.status(503).json({ error: 'Document table not set up yet', setupRequired: true })
+        }
+        throw error
+      }
+      return res.json(data || [])
+    }
+    // POST /api/team-documents  { title, url?, content? }
+    if (path === 'team-documents' && method === 'POST') {
+      const b = req.body || {}
+      const title = typeof b.title === 'string' ? b.title.trim() : ''
+      if (!title) return res.status(400).json({ error: 'Title is required' })
+      const { data, error } = await supabase.from('team_documents').insert({
+        title,
+        url: typeof b.url === 'string' && b.url.trim() ? b.url.trim() : null,
+        content: typeof b.content === 'string' && b.content.trim() ? b.content.trim() : null,
+      }).select().single()
+      if (error) throw error
+      return res.json(data)
+    }
+    // DELETE /api/team-documents?id=
+    if (path === 'team-documents' && method === 'DELETE') {
+      const id = Number(req.query.id)
+      if (!id) return res.status(400).json({ error: 'Document id is required' })
+      const { error } = await supabase.from('team_documents').delete().eq('id', id)
       if (error) throw error
       return res.json({ ok: true })
     }
