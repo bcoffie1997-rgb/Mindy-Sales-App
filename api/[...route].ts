@@ -38,6 +38,45 @@ async function notifySlack(text: string) {
   } catch { /* notifications must never break the API */ }
 }
 
+// ── Slack direct messages (optional; needs SLACK_BOT_TOKEN with chat:write + im:write) ──
+const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN || ''
+const SLACK_USER_IDS: Record<string, string> = {
+  branden: 'U03HUA4JMTP',
+  eric: 'U03HVFF8EHJ',
+  'eric coffie': 'U03HVFF8EHJ',
+  shanoor: 'U0B8M3L1M9V',
+  sikandar: 'U0ADM0ZNK6G',
+  'syed jawad hussain': 'U03QP362KU0',
+  jawad: 'U03QP362KU0',
+  'usama ashraf': 'U07UF1ED88Y',
+  usama: 'U07UF1ED88Y',
+  kash: 'U07H5GDK1ME',
+  kashif: 'U07H5GDK1ME',
+}
+function slackUserId(name: string): string {
+  const n = (name || '').trim().toLowerCase()
+  return SLACK_USER_IDS[n] || SLACK_USER_IDS[n.split(/\s+/)[0]] || ''
+}
+async function slackDM(name: string, text: string) {
+  if (!SLACK_BOT_TOKEN) return
+  const userId = slackUserId(name)
+  if (!userId) return
+  try {
+    const open = await fetch('https://slack.com/api/conversations.open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${SLACK_BOT_TOKEN}` },
+      body: JSON.stringify({ users: userId }),
+    }).then(r => r.json())
+    const channel = open?.channel?.id
+    if (!channel) return
+    await fetch('https://slack.com/api/chat.postMessage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${SLACK_BOT_TOKEN}` },
+      body: JSON.stringify({ channel, text }),
+    })
+  } catch { /* DMs must never break the API */ }
+}
+
 // Automatic priority: due within 3 days → high, within 7 days → medium, otherwise none
 function autoPriority(due: string): string {
   const today = new Date().toISOString().slice(0, 10)
@@ -225,6 +264,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           if (p === 'high') {
             bumped++
             await notifySlack(`🔥 Now HIGH priority (due ${t.due_date}): *${t.title}*${t.assignee ? ` — ${t.assignee}` : ''}`)
+            if (t.assignee) await slackDM(t.assignee, `🔥 Your task *${t.title}* is now HIGH priority — due ${t.due_date}.`)
           }
         }
       }
@@ -245,6 +285,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           ? `🗓 *Weekly task digest* — ${lines.length} open item${lines.length === 1 ? '' : 's'} due this week:\n${lines.join('\n')}`
           : '🗓 *Weekly task digest* — nothing due this week. 🎉'
         await notifySlack(text)
+        // Per-person DM with only their items
+        const byAssignee = new Map<string, any[]>()
+        for (const t of due || []) {
+          if (!t.assignee) continue
+          if (!byAssignee.has(t.assignee)) byAssignee.set(t.assignee, [])
+          byAssignee.get(t.assignee)!.push(t)
+        }
+        for (const [name, items] of byAssignee) {
+          const own = items.map((t: any) => {
+            const overdue = t.due_date < today ? '⚠️ ' : ''
+            return `• ${overdue}${t.due_date} — ${t.title}`
+          })
+          await slackDM(name, `🗓 *Your weekly digest* — ${items.length} open item${items.length === 1 ? '' : 's'} due this week:\n${own.join('\n')}`)
+        }
       }
       return res.json({ ok: true, posted: !!SLACK_WEBHOOK_URL, bumpedToHigh: bumped, digestItems })
     } catch (err: any) {
@@ -961,6 +1015,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       } else {
         await notifySlack(`📋 New task: *${data.title}* (${bits})`)
       }
+      if (data.assignee) {
+        await slackDM(data.assignee, `📋 New task assigned to you: *${data.title}*${data.due_date ? ` — due ${data.due_date}` : ''}${data.priority === 'high' ? ' 🔥 HIGH priority' : ''}`)
+      }
       return res.json(data)
     }
     // PATCH /api/tasks  { id, ...fields }
@@ -993,6 +1050,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         await notifySlack(`✅ Done: *${data.title}*${data.assignee ? ` — ${data.assignee}` : ''}`)
       } else if (data.priority === 'high' && data.assignee && (updates.assignee !== undefined || updates.due_date)) {
         await notifySlack(`🔥 HIGH priority task for *${data.assignee}*: *${data.title}* (due ${data.due_date})`)
+        await slackDM(data.assignee, `🔥 HIGH priority task for you: *${data.title}* — due ${data.due_date}.`)
+      } else if (updates.assignee && data.assignee) {
+        await slackDM(data.assignee, `📋 Task assigned to you: *${data.title}*${data.due_date ? ` — due ${data.due_date}` : ''}`)
       }
       return res.json(data)
     }
