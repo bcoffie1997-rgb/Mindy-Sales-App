@@ -61,7 +61,7 @@ export default function Transcripts() {
   async function runSync() {
     setSyncing(true)
     try {
-      const res = await fetch('/api/sync-fireflies?key=govcon-seed')
+      const res = await fetch('/api/sync-fireflies', { method: 'POST' })
       const json = await res.json()
       if (json.ok) await load()
       else alert('Sync error: ' + (json.error || JSON.stringify(json)))

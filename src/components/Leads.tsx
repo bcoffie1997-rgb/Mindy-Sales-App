@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Search, ChevronDown, ChevronUp, ExternalLink, RefreshCw, ArrowRight } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import { apiJSON, errorMessage } from '../lib/api'
 
 interface Lead {
   id: string
@@ -57,8 +58,18 @@ export default function Leads() {
   const [editing, setEditing] = useState<string | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [syncMsg, setSyncMsg] = useState('')
+  const [error, setError] = useState('')
 
-  const load = () => fetch('/api/leads-only').then(r => r.json()).then(setLeads).catch(() => {})
+  const load = async () => {
+    try {
+      const data = await apiJSON<Lead[]>('/api/leads-only')
+      if (!Array.isArray(data)) throw new Error('Invalid leads response')
+      setLeads(data)
+      setError('')
+    } catch (err) {
+      setError(errorMessage(err))
+    }
+  }
 
   useEffect(() => { load() }, [])
 
@@ -69,8 +80,7 @@ export default function Leads() {
     let totalUpserted = 0
     try {
       for (let guard = 0; guard < 50; guard++) {
-        const res = await fetch(`/api/sync-ghl?key=govcon-seed&page=${page}`)
-        const json = await res.json()
+        const json = await apiJSON<any>(`/api/sync-ghl?page=${page}`, { method: 'POST' })
         if (!json.ok) { setSyncMsg('Sync error: ' + (json.error || JSON.stringify(json))); break }
         totalUpserted += json.upsertedThisCall || 0
         const total = json.totalOpps ? ` of ~${json.totalOpps}` : ''
@@ -114,13 +124,17 @@ export default function Leads() {
   }
 
   const updateLead = async (id: string, updates: Partial<Lead>) => {
-    await fetch(`/api/leads/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates),
-    })
-    setEditing(null)
-    load()
+    try {
+      await apiJSON(`/api/leads/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      })
+      setEditing(null)
+      await load()
+    } catch (err) {
+      setError(errorMessage(err))
+    }
   }
 
   const statuses = [...new Set(leads.map(l => l.status))].sort()
@@ -146,6 +160,7 @@ export default function Leads() {
           </div>
         </div>
       </div>
+      {error && <div role="alert" className="card border-red-500/30 p-3 text-sm text-red-300">{error}</div>}
 
       {/* Filters */}
       <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
@@ -187,6 +202,7 @@ export default function Leads() {
                   {editing === lead.id ? (
                     <select
                       defaultValue={lead.score}
+                      onClick={e => e.stopPropagation()}
                       onChange={e => updateLead(lead.id, { score: e.target.value })}
                       className="input-dark text-xs py-0.5 px-1.5"
                       autoFocus
@@ -198,7 +214,7 @@ export default function Leads() {
                     </select>
                   ) : (
                     <span
-                      onClick={() => setEditing(lead.id)}
+                      onClick={event => { event.stopPropagation(); setEditing(lead.id) }}
                       className={`text-xs font-semibold px-2 py-0.5 rounded-full cursor-pointer ${SCORE_CLASSES[lead.score] || 'bg-white/10 text-slate-400'}`}
                     >{lead.score}</span>
                   )}
@@ -267,6 +283,7 @@ export default function Leads() {
                     {editing === lead.id ? (
                       <select
                         defaultValue={lead.score}
+                        onClick={e => e.stopPropagation()}
                         onChange={e => updateLead(lead.id, { score: e.target.value })}
                         className="input-dark text-xs"
                         autoFocus
@@ -277,7 +294,7 @@ export default function Leads() {
                       </select>
                     ) : (
                       <span
-                        onClick={() => setEditing(lead.id)}
+                        onClick={event => { event.stopPropagation(); setEditing(lead.id) }}
                         className={`text-xs font-semibold px-2 py-0.5 rounded-full cursor-pointer ${SCORE_CLASSES[lead.score] || 'bg-white/10 text-slate-400'}`}
                       >{lead.score}</span>
                     )}

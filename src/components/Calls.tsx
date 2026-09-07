@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Phone, Clock, Building, MessageSquare, Star, UserCheck, ExternalLink, Calendar, ChevronDown, ChevronRight } from 'lucide-react'
+import { apiJSON, errorMessage } from '../lib/api'
 
 interface CallEvent {
   event_id: string
@@ -21,6 +22,24 @@ interface CallsData {
   generated_at: string | null
   upcoming: CallEvent[]
   past: CallEvent[]
+}
+
+function normalizeCalls(data: any): CallsData {
+  const generated_at = data?.generated_at || null
+  if (Array.isArray(data?.upcoming) && Array.isArray(data?.past)) {
+    return { generated_at, upcoming: data.upcoming, past: data.past }
+  }
+  const unique = new Map<string, CallEvent>()
+  for (const call of [...(data?.today || []), ...(data?.tomorrow || []), ...(data?.this_week || [])]) {
+    if (call?.event_id) unique.set(call.event_id, call)
+  }
+  const now = Date.now()
+  const all = [...unique.values()]
+  return {
+    generated_at,
+    upcoming: all.filter(call => new Date(call.end || call.start).getTime() >= now),
+    past: all.filter(call => new Date(call.end || call.start).getTime() < now),
+  }
 }
 
 const SCORE_COLORS: Record<string, string> = {
@@ -124,12 +143,17 @@ function CallCard({ call }: { call: CallEvent }) {
 export default function Calls() {
   const [data, setData] = useState<CallsData>({ generated_at: null, upcoming: [], past: [] })
   const [view, setView] = useState<'upcoming' | 'past'>('upcoming')
+  const [error, setError] = useState('')
 
   useEffect(() => {
-    fetch('/api/calls').then(r => r.json()).then(setData).catch(() => {})
-    const interval = setInterval(() => {
-      fetch('/api/calls').then(r => r.json()).then(setData).catch(() => {})
-    }, 120000)
+    const load = () => apiJSON<any>('/api/calls')
+      .then(result => {
+        setData(normalizeCalls(result))
+        setError('')
+      })
+      .catch(err => setError(errorMessage(err)))
+    load()
+    const interval = setInterval(load, 120000)
     return () => clearInterval(interval)
   }, [])
 
@@ -155,12 +179,13 @@ export default function Calls() {
           ))}
         </div>
       </div>
+      {error && <div role="alert" className="card border-red-500/30 p-3 text-sm text-red-300">{error}</div>}
 
-      {data.generated_at && (
+      {!error && data.generated_at && (
         <p className="text-xs text-slate-500">Last updated: {new Date(data.generated_at).toLocaleString('en-US', { timeZone: 'America/New_York' })}</p>
       )}
 
-      {Object.keys(groups).length === 0 ? (
+      {!error && (Object.keys(groups).length === 0 ? (
         <div className="card p-12 text-center">
           <Phone size={40} className="mx-auto text-slate-600 mb-3" />
           <p className="text-slate-400">{view === 'upcoming' ? 'No upcoming calls' : 'No past calls'}</p>
@@ -180,7 +205,7 @@ export default function Calls() {
             </div>
           ))}
         </div>
-      )}
+      ))}
     </div>
   )
 }

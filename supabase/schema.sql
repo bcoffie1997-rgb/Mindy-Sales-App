@@ -121,3 +121,30 @@ ALTER TABLE reports      DISABLE ROW LEVEL SECURITY;
 ALTER TABLE proposals    DISABLE ROW LEVEL SECURITY;
 ALTER TABLE stripe_cache DISABLE ROW LEVEL SECURITY;
 ALTER TABLE transcripts  DISABLE ROW LEVEL SECURITY;
+
+-- Task manager: shared team board + per-member boards
+CREATE TABLE IF NOT EXISTS tasks (
+  id BIGSERIAL PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT,
+  status TEXT NOT NULL DEFAULT 'todo',
+  priority TEXT NOT NULL DEFAULT 'medium',
+  assignee TEXT,
+  due_date DATE,
+  sort_order INTEGER DEFAULT 0,
+  completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS team_members (
+  id BIGSERIAL PRIMARY KEY,
+  name TEXT UNIQUE NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS tasks_assignee_idx ON tasks(assignee);
+CREATE INDEX IF NOT EXISTS tasks_status_idx ON tasks(status);
+
+ALTER TABLE tasks        DISABLE ROW LEVEL SECURITY;
+ALTER TABLE team_members DISABLE ROW LEVEL SECURITY;

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Users, UserCheck, Flame, Zap, Mail, Phone, FileText, CheckCircle, XCircle, Clock, AlertTriangle, DollarSign } from 'lucide-react'
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
+import { apiJSON, errorMessage } from '../lib/api'
 
 interface Stats {
   total: number
@@ -61,12 +62,20 @@ export default function Dashboard() {
   const [stats, setStats] = useState<Stats | null>(null)
   const [showReport, setShowReport] = useState(false)
   const [reportData, setReportData] = useState<any>(null)
+  const [error, setError] = useState('')
+
+  const loadStats = () => {
+    apiJSON<Stats>('/api/stats')
+      .then(data => {
+        setStats(data)
+        setError('')
+      })
+      .catch(err => setError(errorMessage(err)))
+  }
 
   useEffect(() => {
-    fetch('/api/stats').then(r => r.json()).then(setStats).catch(() => {})
-    const interval = setInterval(() => {
-      fetch('/api/stats').then(r => r.json()).then(setStats).catch(() => {})
-    }, 60000)
+    loadStats()
+    const interval = setInterval(loadStats, 60000)
     return () => clearInterval(interval)
   }, [])
 
@@ -74,16 +83,25 @@ export default function Dashboard() {
     setShowReport(true)
     if (!reportData) {
       Promise.all([
-        fetch('/api/stats').then(r => r.json()),
-        fetch('/api/revenue/report').then(r => r.json()).catch(() => null),
-        fetch('/api/subscriptions').then(r => r.json()).catch(() => null),
-        fetch('/api/calls').then(r => r.json()).catch(() => null),
+        apiJSON<Stats>('/api/stats'),
+        apiJSON<any>('/api/revenue/report').catch(() => null),
+        apiJSON<any>('/api/subscriptions').catch(() => null),
+        apiJSON<any>('/api/calls').catch(() => null),
       ]).then(([stats, rev, subs, calls]) => {
         setReportData({ stats, revenue: rev?.report || null, subs, calls })
-      })
+      }).catch(err => setReportData({ error: errorMessage(err) }))
     }
   }
 
+  if (!stats && error) return (
+    <div className="p-8">
+      <div role="alert" className="card p-6 border-red-500/30">
+        <p className="font-semibold text-red-300">Dashboard data is unavailable</p>
+        <p className="text-sm text-slate-400 mt-1">{error}</p>
+        <button onClick={loadStats} className="btn-secondary mt-4">Try again</button>
+      </div>
+    </div>
+  )
   if (!stats) return <div className="p-8 text-slate-400">Loading...</div>
 
   const scoreData = Object.entries(stats.byScore).map(([name, value]) => ({ name, value }))
@@ -219,6 +237,8 @@ export default function Dashboard() {
             </div>
             {!reportData ? (
               <div className="p-12 text-center text-slate-400">Generating report...</div>
+            ) : reportData.error ? (
+              <div role="alert" className="p-12 text-center text-red-300">{reportData.error}</div>
             ) : (
               <div className="p-6 space-y-8 text-sm">
                 {/* Pipeline Overview */}

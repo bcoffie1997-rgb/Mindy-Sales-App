@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Mic, Clock, Users, ChevronDown, ChevronUp, ExternalLink, Tag, RefreshCw, Search } from 'lucide-react'
+import { apiJSON, errorMessage } from '../lib/api'
 
 interface Attendee { displayName?: string; email?: string }
 interface Transcript {
@@ -36,21 +37,29 @@ export default function Fireflies() {
   const [syncing, setSyncing] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  const [error, setError] = useState('')
 
   async function load() {
     setLoading(true)
-    const data = await fetch('/api/transcripts').then(r => r.json()).catch(() => [])
-    setTranscripts(Array.isArray(data) ? data : [])
+    try {
+      const data = await apiJSON<Transcript[]>('/api/transcripts')
+      if (!Array.isArray(data)) throw new Error('Invalid transcripts response')
+      setTranscripts(data)
+      setError('')
+    } catch (err) {
+      setError(errorMessage(err))
+    }
     setLoading(false)
   }
 
   async function runSync() {
     setSyncing(true)
     try {
-      const res = await fetch('/api/sync-fireflies?key=govcon-seed')
-      const json = await res.json()
+      const json = await apiJSON<any>('/api/sync-fireflies', { method: 'POST' })
       if (json.ok) await load()
-      else alert('Sync error: ' + (json.error || JSON.stringify(json)))
+      else setError('Sync error: ' + (json.error || JSON.stringify(json)))
+    } catch (err) {
+      setError(errorMessage(err))
     } finally {
       setSyncing(false)
     }
@@ -86,6 +95,7 @@ export default function Fireflies() {
           {syncing ? 'Syncing…' : 'Sync from Fireflies'}
         </button>
       </div>
+      {error && <div role="alert" className="card border-red-500/30 p-3 text-sm text-red-300">{error}</div>}
 
       <div className="relative">
         <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />

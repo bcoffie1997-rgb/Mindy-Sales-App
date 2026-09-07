@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Building2, Search } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import { apiJSON, errorMessage } from '../lib/api'
 
 interface Client {
   id: string; name: string; email: string; company: string
@@ -30,9 +31,15 @@ export default function BDManagement() {
   const [clients, setClients] = useState<Client[]>([])
   const [search, setSearch] = useState('')
   const [consultantFilter, setConsultantFilter] = useState('all')
+  const [error, setError] = useState('')
 
   useEffect(() => {
-    fetch('/api/clients').then(r => r.json()).then(setClients).catch(() => {})
+    apiJSON<Client[]>('/api/clients')
+      .then(data => {
+        if (!Array.isArray(data)) throw new Error('Invalid clients response')
+        setClients(data)
+      })
+      .catch(err => setError(errorMessage(err)))
   }, [])
 
   const managed = clients.filter(c => c.metadata?.managed)
@@ -58,6 +65,7 @@ export default function BDManagement() {
         </div>
         <span className="text-sm text-slate-500">{managed.length} clients</span>
       </div>
+      {error && <div role="alert" className="card border-red-500/30 p-3 text-sm text-red-300">{error}</div>}
 
       <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
         <div className="relative flex-1 min-w-0 sm:min-w-[200px] sm:max-w-md">

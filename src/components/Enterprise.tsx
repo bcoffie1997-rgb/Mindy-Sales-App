@@ -17,6 +17,16 @@ const CHANNEL_LABELS: Record<string, string> = {
   osdbu: 'OSDBU', ptac: 'PTAC', score: 'SCORE', sba: 'SBA',
 }
 
+async function loadList<T>(url: string): Promise<T[]> {
+  const response = await fetch(url)
+  if (!response.ok) throw new Error(`Data request failed (${response.status})`)
+  const contentType = response.headers.get('content-type') || ''
+  if (!contentType.includes('application/json')) throw new Error('The deployed data file is missing')
+  const data = await response.json()
+  if (!Array.isArray(data)) throw new Error('The data file has an invalid format')
+  return data
+}
+
 function PublicSectorTab() {
   const [leads, setLeads] = useState<PublicLead[]>([])
   const [loading, setLoading] = useState(true)
@@ -24,12 +34,15 @@ function PublicSectorTab() {
   const [channel, setChannel] = useState('all')
   const [state, setState] = useState('all')
   const [contactOnly, setContactOnly] = useState(false)
+  const [error, setError] = useState('')
 
   useEffect(() => {
-    fetch('/public-sector-leads.json')
-      .then(r => r.json())
+    loadList<PublicLead>('/public-sector-leads.json')
       .then(setLeads)
-      .catch(() => setLeads([]))
+      .catch(err => {
+        setLeads([])
+        setError(err instanceof Error ? err.message : 'Unable to load targets')
+      })
       .finally(() => setLoading(false))
   }, [])
 
@@ -55,6 +68,7 @@ function PublicSectorTab() {
 
   return (
     <div className="space-y-4">
+      {error && <div role="alert" className="card border-red-500/30 p-3 text-sm text-red-300">{error}</div>}
       <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
         <div className="relative flex-1 min-w-0 sm:min-w-[200px] sm:max-w-md">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
@@ -123,12 +137,15 @@ function TradeAssocTab() {
   const [items, setItems] = useState<TradeAssoc[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [error, setError] = useState('')
 
   useEffect(() => {
-    fetch('/trade-associations.json')
-      .then(r => r.json())
+    loadList<TradeAssoc>('/trade-associations.json')
       .then(setItems)
-      .catch(() => setItems([]))
+      .catch(err => {
+        setItems([])
+        setError(err instanceof Error ? err.message : 'Unable to load associations')
+      })
       .finally(() => setLoading(false))
   }, [])
 
@@ -142,6 +159,7 @@ function TradeAssocTab() {
 
   return (
     <div className="space-y-4">
+      {error && <div role="alert" className="card border-red-500/30 p-3 text-sm text-red-300">{error}</div>}
       <div className="relative max-w-md">
         <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
         <input

@@ -9,6 +9,17 @@ export default defineConfig({
   },
   server: {
     port: 3002,
-    proxy: { '/api': 'https://mindy-sales-app.vercel.app' }
+    proxy: { '/api': 'http://localhost:3007' }
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ['react', 'react-dom', 'react-router-dom'],
+          charts: ['recharts'],
+          icons: ['lucide-react'],
+        },
+      },
+    },
   }
 })

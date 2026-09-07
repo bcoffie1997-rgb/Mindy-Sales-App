@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { RefreshCw, Database, CreditCard, Calendar, Mic, Users, CheckCircle, AlertTriangle, XCircle, Clock } from 'lucide-react'
+import { apiJSON, errorMessage } from '../lib/api'
 
 interface SystemStatus {
   key: string; name: string; vendor: string; status: 'operational' | 'degraded' | 'down' | 'not_configured'
@@ -36,12 +37,20 @@ function timeAgo(iso: string) {
 export default function CommandCenter() {
   const [data, setData] = useState<HealthData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
 
   async function runCheck() {
     setLoading(true)
-    const result = await fetch('/api/command-center').then(r => r.json()).catch(() => null)
-    setData(result)
-    setLoading(false)
+    try {
+      const result = await apiJSON<HealthData>('/api/command-center')
+      if (!Array.isArray(result.systems)) throw new Error('Invalid health-check response')
+      setData(result)
+      setError('')
+    } catch (err) {
+      setError(errorMessage(err))
+    } finally {
+      setLoading(false)
+    }
   }
 
   useEffect(() => {
@@ -69,6 +78,12 @@ export default function CommandCenter() {
           {loading ? 'Checking…' : 'Run check'}
         </button>
       </div>
+      {error && (
+        <div role="alert" className="card border-red-500/30 p-4">
+          <p className="font-semibold text-red-300">Health check failed</p>
+          <p className="text-sm text-slate-400 mt-1">{error}</p>
+        </div>
+      )}
 
       {data && overallConfig && (
         <div className={`rounded-xl border bg-gradient-to-r ${overallConfig.bg} ${overallConfig.border} px-4 sm:px-5 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2`}>

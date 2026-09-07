@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { ArrowLeft, CheckCircle, Circle, Plus, RefreshCw, Phone, Calendar } from 'lucide-react'
+import { apiJSON, errorMessage } from '../lib/api'
 
 interface Task { id: string; text: string; done: boolean }
 interface Session { n: number; done: boolean; date: string; note: string }
@@ -31,6 +32,7 @@ export default function DetailView({ mode = 'client' }: { mode?: 'client' | 'lea
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
   const [dirty, setDirty] = useState(false)
   const [tier, setTier] = useState('unknown')
   const [consultant, setConsultant] = useState('')
@@ -52,7 +54,12 @@ export default function DetailView({ mode = 'client' }: { mode?: 'client' | 'lea
   async function load() {
     setLoading(true)
     autoSaveRef.current = false
-    const result = await fetch(`/api/client?id=${encodeURIComponent(id || '')}`).then(r => r.json()).catch(() => null)
+    let result: any = null
+    try {
+      result = await apiJSON(`/api/client?id=${encodeURIComponent(id || '')}`)
+    } catch (err) {
+      setSaveError(errorMessage(err))
+    }
     if (result?.client) {
       const meta = result.client.metadata || {}
       const t = result.client.client_tier || 'unknown'
@@ -88,6 +95,7 @@ export default function DetailView({ mode = 'client' }: { mode?: 'client' | 'lea
   async function save() {
     if (!data?.client) return
     setSaving(true)
+    setSaveError('')
     const meta = {
       ...data.client.metadata || {},
       consultant: consultant || null,
@@ -99,13 +107,20 @@ export default function DetailView({ mode = 'client' }: { mode?: 'client' | 'lea
       sessions,
       deliverables,
     }
-    await fetch(`/api/leads/${encodeURIComponent(id || '')}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ client_tier: tier, notes, metadata: meta }),
-    }).catch(() => {})
-    setSaving(false)
-    setDirty(false)
+    try {
+      const client = await apiJSON<any>(`/api/leads/${encodeURIComponent(id || '')}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_tier: tier, notes, metadata: meta }),
+      })
+      setData((current: any) => current ? { ...current, client } : current)
+      setDirty(false)
+    } catch (err) {
+      setSaveError(errorMessage(err))
+      setDirty(true)
+    } finally {
+      setSaving(false)
+    }
   }
 
   function markDirty() { setDirty(true) }
@@ -177,6 +192,7 @@ export default function DetailView({ mode = 'client' }: { mode?: 'client' | 'lea
           )}
           {saving && <span className="text-xs text-slate-500 flex items-center gap-1"><RefreshCw size={11} className="animate-spin" /> Saving…</span>}
           {!saving && !dirty && data?.client && <span className="text-xs text-emerald-500">Saved</span>}
+          {!saving && saveError && <span role="alert" className="text-xs text-red-300">Not saved: {saveError}</span>}
         </div>
       </div>
 

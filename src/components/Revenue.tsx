@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { DollarSign, TrendingUp, TrendingDown, CreditCard, RefreshCw, ArrowUpRight, Users, FileText, Search, ChevronDown, ChevronUp, AlertCircle } from 'lucide-react'
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
+import { apiJSON, errorMessage } from '../lib/api'
 
 interface RevenueData {
   enabled: boolean
@@ -94,61 +95,75 @@ export default function Revenue() {
   const [crossRef, setCrossRef] = useState<any>(null)
   const [showCrossRef, setShowCrossRef] = useState(false)
   const [upgrading, setUpgrading] = useState<string[]>([])
+  const [actionError, setActionError] = useState('')
 
   const load = () => {
     setLoading(true)
-    fetch('/api/revenue').then(r => r.json()).then(rev => { setRevenue(rev); setLoading(false) }).catch(() => setLoading(false))
-    fetch('/api/subscriptions').then(r => r.json()).then(setSubs).catch(() => {})
+    setActionError('')
+    apiJSON<RevenueData>('/api/revenue')
+      .then(setRevenue)
+      .catch(err => setActionError(errorMessage(err)))
+      .finally(() => setLoading(false))
+    apiJSON<SubsData>('/api/subscriptions').then(setSubs).catch(err => setActionError(errorMessage(err)))
   }
 
   const loadReport = () => {
     setShowReport(true)
     if (!report) {
-      fetch('/api/revenue/report').then(r => r.json()).then(setReport).catch(() => {})
+      apiJSON<ReportData>('/api/revenue/report').then(setReport).catch(err => setActionError(errorMessage(err)))
     }
   }
 
   const searchTransactions = (q: string) => {
     setTxSearch(q)
     setTxLoading(true)
-    fetch(`/api/transactions?q=${encodeURIComponent(q)}`).then(r => r.json()).then(data => {
+    apiJSON<any>(`/api/transactions?q=${encodeURIComponent(q)}`).then(data => {
       setTxResults(data.results || [])
       setTxTotal(data.total || 0)
       setTxLoading(false)
-    }).catch(() => setTxLoading(false))
+    }).catch(err => {
+      setActionError(errorMessage(err))
+      setTxLoading(false)
+    })
   }
 
   const loadCrossRef = () => {
     setShowCrossRef(true)
     if (!crossRef) {
-      fetch('/api/stripe-crossref').then(r => r.json()).then(setCrossRef).catch(() => {})
+      apiJSON('/api/stripe-crossref').then(setCrossRef).catch(err => setActionError(errorMessage(err)))
     }
   }
 
   const upgradeLead = (leadId: string) => {
     setUpgrading(prev => [...prev, leadId])
-    fetch('/api/stripe-crossref/upgrade', {
+    apiJSON('/api/stripe-crossref/upgrade', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ leadIds: [leadId] }),
-    }).then(r => r.json()).then(() => {
+    }).then(() => {
       setCrossRef(null)
-      fetch('/api/stripe-crossref').then(r => r.json()).then(setCrossRef)
+      apiJSON('/api/stripe-crossref').then(setCrossRef)
       setUpgrading(prev => prev.filter(id => id !== leadId))
-    }).catch(() => setUpgrading(prev => prev.filter(id => id !== leadId)))
+    }).catch(err => {
+      setActionError(errorMessage(err))
+      setUpgrading(prev => prev.filter(id => id !== leadId))
+    })
   }
 
   const upgradeAll = (leadIds: string[]) => {
     setUpgrading(leadIds)
-    fetch('/api/stripe-crossref/upgrade', {
+    apiJSON('/api/stripe-crossref/upgrade', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ leadIds }),
-    }).then(r => r.json()).then(() => {
+    }).then(() => {
       setCrossRef(null)
-      fetch('/api/stripe-crossref').then(r => r.json()).then(setCrossRef)
+      apiJSON('/api/stripe-crossref').then(setCrossRef)
       setUpgrading([])
-    }).catch(() => setUpgrading([]))
+    }).catch(err => {
+      setActionError(errorMessage(err))
+      setUpgrading([])
+    })
   }
 
   useEffect(() => { load() }, [])
@@ -200,6 +215,7 @@ export default function Revenue() {
           </button>
         </div>
       </div>
+      {actionError && <div role="alert" className="card border-red-500/30 p-3 text-sm text-red-300">{actionError}</div>}
 
       {/* Metric Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">

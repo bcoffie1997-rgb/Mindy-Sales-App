@@ -1,10 +1,50 @@
 // @ts-nocheck — runtime-tested serverless handler; skip strict type-check at build
-import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { createClient } from '@supabase/supabase-js'
 import Stripe from 'stripe'
+import { createHmac, timingSafeEqual } from 'node:crypto'
+
+type VercelRequest = {
+  query: Record<string, string | string[] | undefined>
+  headers: Record<string, string | string[] | undefined>
+  method?: string
+  url?: string
+  body?: any
+}
+
+type VercelResponse = {
+  setHeader(name: string, value: string | string[]): VercelResponse
+  status(code: number): VercelResponse
+  json(value: any): VercelResponse
+  end(): VercelResponse
+}
 
 const AGENTS = ['gc-lead-intake','gc-email-responder','gc-appointment-setter','gc-post-call','gc-crm-morning','gc-crm-evening','gc-qa-health']
 const PROPOSAL_KEYWORDS = ['proposal sent','proposal delivered','pricing sent','engagement letter','sent proposal','sent pricing','payment link']
+
+const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || ''
+const SESSION_SECRET = process.env.DASHBOARD_SESSION_SECRET || DASHBOARD_PASSWORD
+const SESSION_COOKIE = 'govcon_dashboard_session'
+
+function sessionToken() {
+  return createHmac('sha256', SESSION_SECRET).update('authenticated-dashboard-session-v1').digest('hex')
+}
+
+function safeEqual(a: string, b: string) {
+  const aa = Buffer.from(a), bb = Buffer.from(b)
+  return aa.length === bb.length && timingSafeEqual(aa, bb)
+}
+
+function cookieValue(req: VercelRequest, name: string) {
+  const raw = req.headers.cookie || ''
+  const entry = raw.split(';').map(v => v.trim()).find(v => v.startsWith(`${name}=`))
+  return entry ? decodeURIComponent(entry.slice(name.length + 1)) : ''
+}
+
+function isAuthenticated(req: VercelRequest) {
+  if (!DASHBOARD_PASSWORD) return true
+  const token = cookieValue(req, SESSION_COOKIE)
+  return !!token && safeEqual(token, sessionToken())
+}
 
 // ── Supabase client (inlined; no relative imports to keep ESM happy) ──
 const SUPA_URL = (process.env.SUPABASE_URL || '').trim()
@@ -56,6 +96,13 @@ function matchStripeToLead(email: string, name: string, leads: any[]): any | nul
   return leads.find((l: any) => (e && l.email && l.email.toLowerCase() === e) || (n && l.name && l.name.toLowerCase() === n)) || null
 }
 
+function normalizeLead(lead: any) {
+  if (!lead) return lead
+  const raw = String(lead.score || '').toUpperCase()
+  const score = raw === 'COLD' ? 'BASIC' : raw
+  return score ? { ...lead, score } : lead
+}
+
 // PostgREST caps a single select at 1000 rows. This range-paginates so we get
 // every row regardless of table size (the leads table now holds ~2k+ rows).
 async function fetchAllRows(table: string, columns = '*', applyFilter?: (q: any) => any): Promise<any[]> {
@@ -74,9 +121,11 @@ async function fetchAllRows(table: string, columns = '*', applyFilter?: (q: any)
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  res.setHeader('Access-Control-Allow-Origin', '*')
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,OPTIONS')
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+  res.setHeader('Cache-Control', 'no-store')
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('Referrer-Policy', 'same-origin')
   if (req.method === 'OPTIONS') return res.status(200).end()
 
   // Derive the route from the URL itself (robust across Vercel param shapes)
@@ -86,44 +135,58 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   else if (typeof rawRoute === 'string' && rawRoute) slug = rawRoute.split('/')
   else {
     // Fall back to parsing the request URL
-    const urlPath = (req.url || '').split('?')[0].replace(/^\/api\/?/, '')
+    const urlPath = (req.url || '').split('?')[0].replace(/^\/api\/?/, '').replace(/^\/+/, '')
     slug = urlPath ? urlPath.split('/') : []
   }
   const path = slug.join('/')
-
-  // Debug: return env var + connection status for /api/health
-  if (path === 'health') {
-    let dbCheck = 'not_attempted'
-    if (supabaseReady) {
-      try {
-        const { error } = await supabase.from('leads').select('id').limit(1)
-        dbCheck = error ? `query_error: ${error.message}` : 'connected'
-      } catch (e: any) {
-        dbCheck = `exception: ${e?.message || e}`
-      }
-    }
-    return res.json({
-      status: supabaseReady ? 'ok' : 'missing_or_bad_env',
-      supabase_url_set: !!process.env.SUPABASE_URL,
-      supabase_url_preview: supabaseUrlValue ? supabaseUrlValue.slice(0, 30) + '...' : '(empty)',
-      supabase_key_set: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
-      stripe_key_set: !!process.env.STRIPE_SECRET_KEY,
-      init_error: initError,
-      db_check: dbCheck,
-      env_keys: Object.keys(process.env).filter(k => k.includes('SUPA') || k.includes('STRIPE')).sort()
-    })
-  }
   const method = req.method || 'GET'
+
+  if (path === 'session') {
+    if (method === 'GET') {
+      return res.json({ authenticated: isAuthenticated(req), authRequired: !!DASHBOARD_PASSWORD })
+    }
+    if (method === 'POST') {
+      if (!DASHBOARD_PASSWORD) return res.json({ authenticated: true, authRequired: false })
+      const password = typeof req.body?.password === 'string' ? req.body.password : ''
+      if (!safeEqual(password, DASHBOARD_PASSWORD)) {
+        return res.status(401).json({ error: 'Invalid password' })
+      }
+      const secure = process.env.VERCEL || req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : ''
+      res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${sessionToken()}; Path=/; HttpOnly${secure}; SameSite=Strict; Max-Age=28800`)
+      return res.json({ authenticated: true, authRequired: true })
+    }
+    if (method === 'DELETE') {
+      res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`)
+      return res.json({ authenticated: false, authRequired: !!DASHBOARD_PASSWORD })
+    }
+    return res.status(405).json({ error: 'Method not allowed' })
+  }
+
+  // Minimal public health endpoint. Do not expose environment names or values.
+  if (path === 'health') {
+    if (!supabaseReady) return res.status(503).json({ status: 'degraded', database: 'unavailable' })
+    try {
+      const { error } = await supabase.from('leads').select('id').limit(1)
+      if (error) return res.status(503).json({ status: 'degraded', database: 'unavailable' })
+      return res.json({ status: 'ok', database: 'connected' })
+    } catch {
+      return res.status(503).json({ status: 'degraded', database: 'unavailable' })
+    }
+  }
+
+  if (!isAuthenticated(req)) return res.status(401).json({ error: 'Authentication required' })
+  if (!supabaseReady) return res.status(503).json({ error: 'Database unavailable' })
 
   try {
     // GET /api/stats
     if (path === 'stats') {
       const [all, { data: events }] = await Promise.all([
         fetchAllRows('leads', '*'),
-        supabase.from('agent_events').select('agent_name,event_type,ts').eq('event_type','run_summary')
+        supabase.from('agent_events').select('agent_name,event_type,ts').eq('event_type','run_summary').order('ts',{ascending:true})
       ])
-      const leads = (all||[]).filter((l:any) => l.type !== 'client')
-      const clients = (all||[]).filter((l:any) => l.type === 'client')
+      const normalized = (all||[]).map(normalizeLead)
+      const leads = normalized.filter((l:any) => l.type !== 'client')
+      const clients = normalized.filter((l:any) => l.type === 'client')
       const byScore:Record<string,number> = {}, byStatus:Record<string,number> = {}
       for (const l of leads) {
         if (l.score) byScore[l.score] = (byScore[l.score]||0)+1
@@ -142,26 +205,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const last = runs[runs.length-1]
         agentHealth[agent] = { lastRun: last?.ts||null, runsToday: runs.filter((e:any) => new Date(e.ts).toDateString()===todayStr).length, status: last?(now-new Date(last.ts).getTime()<86400000?'ok':'stale'):'never' }
       }
-      const proposalsOut = (all||[]).filter((l:any) => l.status==='proposal_sent'||PROPOSAL_KEYWORDS.some(kw=>((l.last_action||'')+' '+(l.notes||'')).toLowerCase().includes(kw))).length
-      return res.json({ total:(all||[]).length, totalLeads:leads.length, totalClients:clients.length, byScore, byStatus, clientsByTier, clientsByStatus, agentHealth, proposalsOut, recentLeads:leads.filter((l:any)=>l.status!=='paid').slice(-5).reverse(), recentClients:clients.slice(-5).reverse() })
+      const proposalsOut = normalized.filter((l:any) => l.status==='proposal_sent'||PROPOSAL_KEYWORDS.some(kw=>((l.last_action||'')+' '+(l.notes||'')).toLowerCase().includes(kw))).length
+      return res.json({ total:normalized.length, totalLeads:leads.length, totalClients:clients.length, byScore, byStatus, clientsByTier, clientsByStatus, agentHealth, proposalsOut, recentLeads:leads.filter((l:any)=>l.status!=='paid').slice(-5).reverse(), recentClients:clients.slice(-5).reverse() })
     }
 
     // GET /api/leads-only
     if (path === 'leads-only') {
       const data = await fetchAllRows('leads', '*', (q:any) => q.neq('type','client').order('created_at',{ascending:false}))
-      return res.json(data||[])
+      return res.json((data||[]).map(normalizeLead))
     }
 
     // GET /api/clients
     if (path === 'clients') {
       const data = await fetchAllRows('leads', '*', (q:any) => q.eq('type','client').order('created_at',{ascending:false}))
-      return res.json(data||[])
+      return res.json((data||[]).map(normalizeLead))
     }
 
     // GET /api/leads
     if (path === 'leads' && method === 'GET') {
       const data = await fetchAllRows('leads', '*', (q:any) => q.order('created_at',{ascending:false}))
-      return res.json(data||[])
+      return res.json((data||[]).map(normalizeLead))
     }
 
     // GET/PATCH /api/leads/:id
@@ -170,7 +233,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (method === 'GET') {
         const { data, error } = await supabase.from('leads').select('*').eq('id',id).single()
         if (error) return res.status(404).json({ error:'Lead not found' })
-        return res.json(data)
+        return res.json(normalizeLead(data))
       }
       if (method === 'PATCH') {
         const { data, error } = await supabase.from('leads').update({...req.body, last_action_date:new Date().toISOString()}).eq('id',id).select().single()
@@ -191,7 +254,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const cutoff = new Date(Date.now()-hours*3600000).toISOString()
       const { data, error } = await supabase.from('agent_events').select('*').gte('ts',cutoff).order('ts',{ascending:false}).limit(200)
       if (error) throw error
-      return res.json(data||[])
+      return res.json((data||[]).map((event:any) => ({
+        ...event,
+        from: event.from || event.agent_name || 'unknown',
+        type: event.type || event.event_type || 'unknown',
+      })))
     }
 
     // GET /api/reports
@@ -251,7 +318,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const customerTotals:Record<string,{name:string;email:string;total:number;count:number}> = {}
       for (const c of allCharges) { const email=c.billing_details?.email||c.receipt_email||'',name=c.billing_details?.name||email||'Unknown',key=email||name; if(!customerTotals[key])customerTotals[key]={name,email,total:0,count:0}; customerTotals[key].total+=c.amount/100; customerTotals[key].count++ }
       const topCustomers=Object.values(customerTotals).sort((a,b)=>b.total-a.total).slice(0,10)
-      const growthData=sortedMonths.map(([month,data],i)=>({month,revenue:data.revenue,count:data.count,growth:i>0?((data.revenue-sortedMonths[i-1][1].revenue)/sortedMonths[i-1][1].revenue*100).toFixed(1)+'%':'N/A'}))
+      const growthData=sortedMonths.map(([month,data],i)=>{
+        const previous = i > 0 ? sortedMonths[i-1][1].revenue : 0
+        return { month, revenue:data.revenue, count:data.count, growth:previous>0?((data.revenue-previous)/previous*100).toFixed(1)+'%':'N/A' }
+      })
       return res.json({ enabled:true, report:{ generated:now.toISOString(), summary:{ thisMonth:currentMonth?{month:currentMonth[0],revenue:currentMonth[1].revenue,transactions:currentMonth[1].count}:null, lastMonth:prevMonth?{month:prevMonth[0],revenue:prevMonth[1].revenue,transactions:prevMonth[1].count}:null, ytd,mrr:Math.round(mrr*100)/100,activeSubscriptions:activeSubs.data.length,totalTransactions:allCharges.length,avgTransactionValue:allCharges.length>0?Math.round(allCharges.reduce((s,c)=>s+c.amount/100,0)/allCharges.length):0 }, monthlyTrend:growthData, topCustomers, clientMatches:topCustomers.map(tc=>{const match=matchStripeToLead(tc.email,tc.name,allLeads||[]);return{...tc,client_match:match?{name:match.name,type:match.type,tier:match.client_tier,status:match.client_status}:null}}) } })
     }
 
@@ -315,10 +385,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.json({ enabled:true,total:transactions.length,results:filtered })
     }
 
-    // POST or GET /api/seed-from-stripe?key=govcon-seed
+    // POST /api/seed-from-stripe (protected by the dashboard session)
     // One-time: reconstruct client roster from Stripe payers into Supabase
     if (path === 'seed-from-stripe') {
-      if ((req.query.key as string) !== 'govcon-seed') return res.status(403).json({ error: 'Forbidden — add ?key=govcon-seed' })
+      if (method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
       if (!getStripe()) return res.status(400).json({ error: 'Stripe not configured' })
 
       const now = new Date()
@@ -374,14 +444,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.json({ ok: true, stripePayers: rows.length, upsertedClients: inserted, totalChargesScanned: allCharges.length })
     }
 
-    // GET or POST /api/sync-ghl?key=govcon-seed[&page=N][&pages=M]
+    // POST /api/sync-ghl[?page=N&pages=M] (protected by the dashboard session)
     // Opportunity-driven, RESUMABLE lead import from GoHighLevel → Supabase leads table.
     // The account has ~20k contacts but only ~2k opportunities (the real pipeline), so we
     // import leads from opportunities. Each call processes a bounded number of opportunity
     // pages within a ~22s time budget, then returns nextPage so it can be called repeatedly
     // until done — this keeps every invocation safely under the 30s serverless limit.
     if (path === 'sync-ghl') {
-      if ((req.query.key as string) !== 'govcon-seed') return res.status(403).json({ error: 'Forbidden — add ?key=govcon-seed' })
+      if (method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
       const GHL_TOKEN = process.env.GHL_API_KEY
       const GHL_LOCATION = process.env.GHL_LOCATION_ID
@@ -411,13 +481,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       function scoreFor(stage: string) {
         const s = stage.toLowerCase()
-        if (s.includes('sold') || s.includes('won') || s.includes('closed')) return { score: 'hot', status: 'paid' }
-        if (s.includes('proposal') || s.includes('contract') || s.includes('payment') || s.includes('closing')) return { score: 'hot', status: 'proposal_sent' }
-        if (s.includes('missed')) return { score: 'warm', status: 'no_show' }
-        if (s.includes('meeting') || s.includes('call') || s.includes('schedule') || s.includes('webinar') || s.includes('bid')) return { score: 'hot', status: 'call_scheduled' }
-        if (s.includes('follow')) return { score: 'warm', status: 'follow_up' }
-        if (s.includes('lost') || s.includes('dead') || s.includes('disqualified')) return { score: 'cold', status: 'dead' }
-        return { score: 'warm', status: 'new' }
+        if (s.includes('sold') || s.includes('won') || s.includes('closed')) return { score: 'HOT', status: 'closed_won' }
+        if (s.includes('proposal') || s.includes('contract') || s.includes('payment') || s.includes('closing')) return { score: 'HOT', status: 'proposal_sent' }
+        if (s.includes('missed')) return { score: 'WARM', status: 'no_show' }
+        if (s.includes('meeting') || s.includes('call') || s.includes('schedule') || s.includes('webinar') || s.includes('bid')) return { score: 'HOT', status: 'booked' }
+        if (s.includes('follow')) return { score: 'WARM', status: 'meeting_interest' }
+        if (s.includes('lost') || s.includes('dead') || s.includes('disqualified')) return { score: 'BASIC', status: 'closed_lost' }
+        return { score: 'WARM', status: 'new' }
       }
 
       let page = startPage
@@ -498,7 +568,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         skippedExistingClients: skippedClients,
         hint: done
           ? 'Sync complete 🎉'
-          : `Not finished — call again with ?key=govcon-seed&page=${page}`
+          : `Not finished — send another authenticated POST with ?page=${page}`
       })
     }
 
@@ -511,10 +581,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.json(data || [])
     }
 
-    // GET or POST /api/sync-fireflies?key=govcon-seed
+    // POST /api/sync-fireflies (protected by the dashboard session)
     // Pull call transcripts + summaries from Fireflies → Supabase transcripts table
     if (path === 'sync-fireflies') {
-      if ((req.query.key as string) !== 'govcon-seed') return res.status(403).json({ error: 'Forbidden — add ?key=govcon-seed' })
+      if (method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
       const FF_KEY = process.env.FIREFLIES_API_KEY
       if (!FF_KEY) return res.status(400).json({ error: 'FIREFLIES_API_KEY env var not set' })
@@ -631,7 +701,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Calls (upcoming/past from agent_events if available)
       let calls = { upcoming: [], past: [] }
 
-      return res.json({ client, payments, transcripts: transcripts || [], calls })
+      return res.json({ client: normalizeLead(client), payments, transcripts: transcripts || [], calls })
     }
 
     // GET /api/command-center — live health check of all connected systems
@@ -676,10 +746,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       // GoHighLevel
       const ghlKey = process.env.GHL_API_KEY
-      if (ghlKey) {
+      const ghlLocation = process.env.GHL_LOCATION_ID
+      if (ghlKey && ghlLocation) {
         try {
-          const gRes = await fetch('https://services.leadconnectorhq.com/opportunities/?locationId=&limit=1', { headers: { 'Authorization': `Bearer ${ghlKey}`, 'Version': '2021-07-28' } })
-          systems.push({ key: 'ghl', name: 'CRM', vendor: 'GoHighLevel', status: gRes.status < 500 ? 'operational' : 'degraded', lastChecked: checkedAt })
+          const gRes = await fetch(`https://services.leadconnectorhq.com/opportunities/search?location_id=${encodeURIComponent(ghlLocation)}&limit=1&page=1`, { headers: { 'Authorization': `Bearer ${ghlKey}`, 'Version': '2021-07-28' } })
+          systems.push({ key: 'ghl', name: 'CRM', vendor: 'GoHighLevel', status: gRes.ok ? 'operational' : 'degraded', detail: gRes.ok ? undefined : `HTTP ${gRes.status}`, lastChecked: checkedAt })
         } catch {
           systems.push({ key: 'ghl', name: 'CRM', vendor: 'GoHighLevel', status: 'degraded', lastChecked: checkedAt })
         }
@@ -701,12 +772,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         systems.push({ key: 'fireflies', name: 'Call Notes', vendor: 'Fireflies', status: 'not_configured', lastChecked: checkedAt })
       }
 
-      // Calendar (Google — check via agent_events table)
+      // Calendar cache. A database query alone does not prove Google Calendar works.
       try {
-        const { count } = await supabase.from('agent_events').select('*', { count: 'exact', head: true })
-        systems.push({ key: 'calendar', name: 'Calendar', vendor: 'Google Calendar', status: 'operational', metric: count ? `${count} events` : null, lastChecked: checkedAt })
+        const { data, error } = await supabase.from('calls_cache').select('payload').eq('id',1).single()
+        const generatedAt = data?.payload?.generated_at
+        const age = generatedAt ? Date.now() - new Date(generatedAt).getTime() : Infinity
+        const fresh = !error && age < 24 * 60 * 60 * 1000
+        systems.push({ key: 'calendar', name: 'Calendar', vendor: 'Google Calendar', status: fresh ? 'operational' : 'degraded', detail: generatedAt ? `Cache updated ${generatedAt}` : 'No calendar sync data', lastChecked: checkedAt })
       } catch {
-        systems.push({ key: 'calendar', name: 'Calendar', vendor: 'Google Calendar', status: 'not_configured', lastChecked: checkedAt })
+        systems.push({ key: 'calendar', name: 'Calendar', vendor: 'Google Calendar', status: 'degraded', detail: 'Calendar cache unavailable', lastChecked: checkedAt })
       }
 
       const operational = systems.filter(s => s.status === 'operational').length
@@ -771,6 +845,98 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       const result = Object.entries(series).sort(([a], [b]) => a.localeCompare(b)).map(([month, revenue]) => ({ month, revenue }))
       return res.json(result)
+    }
+
+    // ── Task manager ──
+    // GET /api/tasks?assignee=<name>
+    if (path === 'tasks' && method === 'GET') {
+      let q = supabase.from('tasks').select('*').order('sort_order', { ascending: true }).order('created_at', { ascending: true })
+      const assignee = typeof req.query.assignee === 'string' ? req.query.assignee : ''
+      if (assignee) q = q.eq('assignee', assignee)
+      const { data, error } = await q
+      if (error) {
+        if (error.code === '42P01' || error.code === 'PGRST205' || /does not exist|schema cache/i.test(error.message || '')) {
+          return res.status(503).json({ error: 'Task tables not set up yet', setupRequired: true })
+        }
+        throw error
+      }
+      return res.json(data || [])
+    }
+    // POST /api/tasks
+    if (path === 'tasks' && method === 'POST') {
+      const b = req.body || {}
+      const title = typeof b.title === 'string' ? b.title.trim() : ''
+      if (!title) return res.status(400).json({ error: 'Title is required' })
+      const row: any = {
+        title,
+        description: typeof b.description === 'string' ? b.description : null,
+        assignee: typeof b.assignee === 'string' && b.assignee.trim() ? b.assignee.trim() : null,
+        priority: ['low', 'medium', 'high'].includes(b.priority) ? b.priority : 'medium',
+        due_date: typeof b.due_date === 'string' && b.due_date ? b.due_date : null,
+        status: ['todo', 'in_progress', 'done', 'reminder'].includes(b.status) ? b.status : 'todo',
+      }
+      const { data, error } = await supabase.from('tasks').insert(row).select().single()
+      if (error) throw error
+      return res.json(data)
+    }
+    // PATCH /api/tasks  { id, ...fields }
+    if (path === 'tasks' && method === 'PATCH') {
+      const b = req.body || {}
+      const id = Number(b.id)
+      if (!id) return res.status(400).json({ error: 'Task id is required' })
+      const updates: any = { updated_at: new Date().toISOString() }
+      if (typeof b.title === 'string' && b.title.trim()) updates.title = b.title.trim()
+      if (typeof b.description === 'string' || b.description === null) updates.description = b.description
+      if (typeof b.assignee === 'string' || b.assignee === null) updates.assignee = b.assignee || null
+      if (['low', 'medium', 'high'].includes(b.priority)) updates.priority = b.priority
+      if (typeof b.due_date === 'string' || b.due_date === null) updates.due_date = b.due_date || null
+      if (typeof b.sort_order === 'number') updates.sort_order = b.sort_order
+      if (['todo', 'in_progress', 'done', 'reminder'].includes(b.status)) {
+        updates.status = b.status
+        updates.completed_at = b.status === 'done' ? new Date().toISOString() : null
+      }
+      const { data, error } = await supabase.from('tasks').update(updates).eq('id', id).select().single()
+      if (error) throw error
+      return res.json(data)
+    }
+    // DELETE /api/tasks?id=
+    if (path === 'tasks' && method === 'DELETE') {
+      const id = Number(req.query.id)
+      if (!id) return res.status(400).json({ error: 'Task id is required' })
+      const { error } = await supabase.from('tasks').delete().eq('id', id)
+      if (error) throw error
+      return res.json({ ok: true })
+    }
+
+    // GET /api/team-members
+    if (path === 'team-members' && method === 'GET') {
+      const { data, error } = await supabase.from('team_members').select('*').order('name', { ascending: true })
+      if (error) {
+        if (error.code === '42P01' || error.code === 'PGRST205' || /does not exist|schema cache/i.test(error.message || '')) {
+          return res.status(503).json({ error: 'Task tables not set up yet', setupRequired: true })
+        }
+        throw error
+      }
+      return res.json(data || [])
+    }
+    // POST /api/team-members  { name }
+    if (path === 'team-members' && method === 'POST') {
+      const name = typeof req.body?.name === 'string' ? req.body.name.trim() : ''
+      if (!name) return res.status(400).json({ error: 'Name is required' })
+      const { data, error } = await supabase.from('team_members').insert({ name }).select().single()
+      if (error) {
+        if (error.code === '23505') return res.status(409).json({ error: 'That person is already on the team' })
+        throw error
+      }
+      return res.json(data)
+    }
+    // DELETE /api/team-members?id=
+    if (path === 'team-members' && method === 'DELETE') {
+      const id = Number(req.query.id)
+      if (!id) return res.status(400).json({ error: 'Member id is required' })
+      const { error } = await supabase.from('team_members').delete().eq('id', id)
+      if (error) throw error
+      return res.json({ ok: true })
     }
 
     res.status(404).json({ error:'Not found', debug: { path, slug, rawRoute, url: req.url } })

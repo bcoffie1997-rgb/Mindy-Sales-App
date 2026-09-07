@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Search } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import { apiJSON, errorMessage } from '../lib/api'
 
 interface Client {
   id: string; name: string; email: string; phone: string; company: string
@@ -54,9 +55,15 @@ export default function ClientsList() {
   const [statusFilter, setStatusFilter] = useState('all')
   const [sort, setSort] = useState('recent')
   const [toggling, setToggling] = useState<string | null>(null)
+  const [error, setError] = useState('')
 
   useEffect(() => {
-    fetch('/api/clients').then(r => r.json()).then(setClients).catch(() => {})
+    apiJSON<Client[]>('/api/clients')
+      .then(data => {
+        if (!Array.isArray(data)) throw new Error('Invalid clients response')
+        setClients(data)
+      })
+      .catch(err => setError(errorMessage(err)))
   }, [])
 
   const plans = [...new Set(clients.map(planLabel))].sort((a, b) => {
@@ -92,11 +99,17 @@ export default function ClientsList() {
     const managed = !client.metadata?.managed
     const meta = { ...client.metadata, managed }
     setClients(prev => prev.map(c => c.id === client.id ? { ...c, metadata: meta } : c))
-    await fetch(`/api/leads/${encodeURIComponent(client.id)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ metadata: meta }),
-    }).catch(() => {})
+    try {
+      await apiJSON(`/api/leads/${encodeURIComponent(client.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ metadata: meta }),
+      })
+      setError('')
+    } catch (err) {
+      setClients(prev => prev.map(c => c.id === client.id ? client : c))
+      setError(errorMessage(err))
+    }
     setToggling(null)
   }
 
@@ -106,6 +119,7 @@ export default function ClientsList() {
         <h2 className="text-2xl font-bold text-white">Clients</h2>
         <span className="text-sm text-slate-500">{clients.length} total · {activeCount} active</span>
       </div>
+      {error && <div role="alert" className="card border-red-500/30 p-3 text-sm text-red-300">{error}</div>}
 
       <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
         <div className="relative flex-1 min-w-0 sm:min-w-[200px] sm:max-w-sm">
