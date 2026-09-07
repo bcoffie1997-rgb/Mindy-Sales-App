@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Phone, Clock, Building, MessageSquare, Star, UserCheck, ExternalLink, Calendar, ChevronDown, ChevronRight } from 'lucide-react'
 import { apiJSON, errorMessage } from '../lib/api'
+import Fireflies from './Fireflies'
 
 interface CallEvent {
   event_id: string
@@ -140,7 +141,7 @@ function CallCard({ call }: { call: CallEvent }) {
   )
 }
 
-export default function Calls() {
+function ScheduledCalls() {
   const [data, setData] = useState<CallsData>({ generated_at: null, upcoming: [], past: [] })
   const [view, setView] = useState<'upcoming' | 'past'>('upcoming')
   const [error, setError] = useState('')
@@ -207,5 +208,32 @@ export default function Calls() {
         </div>
       ))}
     </div>
+  )
+}
+
+export default function Calls() {
+  const [tab, setTab] = useState<'calls' | 'notes'>('calls')
+
+  return (
+    <div>
+      <div className="flex items-center gap-1 px-4 sm:px-6 border-b border-white/10">
+        <PageTab label="Scheduled Calls" active={tab === 'calls'} onClick={() => setTab('calls')} />
+        <PageTab label="Fireflies Notes" active={tab === 'notes'} onClick={() => setTab('notes')} />
+      </div>
+      {tab === 'calls' ? <ScheduledCalls /> : <Fireflies />}
+    </div>
+  )
+}
+
+function PageTab({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 transition-colors ${
+        active ? 'border-purple-500 text-white' : 'border-transparent text-slate-400 hover:text-slate-200'
+      }`}
+    >
+      {label}
+    </button>
   )
 }

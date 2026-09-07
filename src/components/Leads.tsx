@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Search, ChevronDown, ChevronUp, ExternalLink, RefreshCw, ArrowRight } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { apiJSON, errorMessage } from '../lib/api'
+import Enterprise from './Enterprise'
 
 interface Lead {
   id: string
@@ -47,7 +48,7 @@ function fmtDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-export default function Leads() {
+function LeadsList() {
   const navigate = useNavigate()
   const [leads, setLeads] = useState<Lead[]>([])
   const [search, setSearch] = useState('')
@@ -319,5 +320,32 @@ export default function Leads() {
         </table>
       </div>
     </div>
+  )
+}
+
+export default function Leads() {
+  const [tab, setTab] = useState<'leads' | 'enterprise'>('leads')
+
+  return (
+    <div>
+      <div className="flex items-center gap-1 px-4 sm:px-6 border-b border-white/10">
+        <PageTab label="Sales Leads" active={tab === 'leads'} onClick={() => setTab('leads')} />
+        <PageTab label="Enterprise" active={tab === 'enterprise'} onClick={() => setTab('enterprise')} />
+      </div>
+      {tab === 'leads' ? <LeadsList /> : <Enterprise />}
+    </div>
+  )
+}
+
+function PageTab({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 transition-colors ${
+        active ? 'border-purple-500 text-white' : 'border-transparent text-slate-400 hover:text-slate-200'
+      }`}
+    >
+      {label}
+    </button>
   )
 }

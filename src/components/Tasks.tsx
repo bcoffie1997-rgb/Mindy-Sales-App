@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Plus, Trash2, UserPlus, X, ChevronLeft, ChevronRight, CalendarDays, Pencil, Check, Bell, Flag } from 'lucide-react'
+import { Plus, Trash2, UserPlus, X, ChevronLeft, ChevronRight, CalendarDays, Pencil, Check, Bell, Flag, LayoutGrid, List, Calendar } from 'lucide-react'
 import { apiJSON, errorMessage } from '../lib/api'
 
 interface Task {
@@ -70,6 +70,7 @@ export default function Tasks() {
   const [addingPerson, setAddingPerson] = useState(false)
   const [personName, setPersonName] = useState('')
   const [saving, setSaving] = useState(false)
+  const [view, setView] = useState<'board' | 'list' | 'calendar'>('board')
 
   async function load() {
     try {
@@ -78,7 +79,12 @@ export default function Tasks() {
         apiJSON<TeamMember[]>('/api/team-members'),
       ])
       setTasks(t)
-      setMembers(m)
+      const pinLast = ['Branden', 'Eric Coffie']
+      setMembers([...m].sort((a, b) => {
+        const pa = pinLast.includes(a.name) ? 1 : 0
+        const pb = pinLast.includes(b.name) ? 1 : 0
+        return pa - pb || a.name.localeCompare(b.name)
+      }))
       setError('')
       setSetupRequired(false)
     } catch (err: any) {
@@ -97,9 +103,14 @@ export default function Tasks() {
     return [...filtered].sort((a, b) => order[a.status] - order[b.status])
   }, [tasks, activeTab])
 
+  // Tasks shown in list/calendar views: team tab = unassigned (team-wide), member tab = theirs
+  const viewTasks = useMemo(() =>
+    activeTab === 'team' ? tasks.filter(t => !t.assignee) : tasks.filter(t => t.assignee === activeTab),
+    [tasks, activeTab])
+
   const priorityList = useMemo(() =>
     tasks
-      .filter(t => t.status === 'todo' || t.status === 'in_progress')
+      .filter(t => (t.status === 'todo' || t.status === 'in_progress') && !t.assignee)
       .sort((a, b) =>
         PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority] ||
         (a.due_date || '9999').localeCompare(b.due_date || '9999') ||
@@ -109,7 +120,7 @@ export default function Tasks() {
 
   const reminderList = useMemo(() =>
     tasks
-      .filter(t => t.status === 'reminder')
+      .filter(t => t.status === 'reminder' && !t.assignee)
       .sort((a, b) => (a.due_date || '').localeCompare(b.due_date || '')),
     [tasks])
 
@@ -256,6 +267,11 @@ export default function Tasks() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-2xl font-bold text-white">Tasks</h1>
         <div className="flex items-center gap-2">
+          <div className="inline-flex items-center gap-0.5 bg-white/5 rounded-xl p-1 border border-white/10">
+            <ViewButton icon={LayoutGrid} label="Board" active={view === 'board'} onClick={() => setView('board')} />
+            <ViewButton icon={List} label="List" active={view === 'list'} onClick={() => setView('list')} />
+            <ViewButton icon={Calendar} label="Calendar" active={view === 'calendar'} onClick={() => setView('calendar')} />
+          </div>
           <button onClick={() => setAddingPerson(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium text-slate-300 hover:text-white border border-white/10 hover:border-white/20 transition-colors">
             <UserPlus size={16} /> Add person
           </button>
@@ -300,7 +316,11 @@ export default function Tasks() {
         ))}
       </div>
 
-      {activeTab === 'team' ? (
+      {view === 'list' ? (
+        <TaskListView tasks={viewTasks} onComplete={completeTask} onEdit={openEdit} onDelete={deleteTask} />
+      ) : view === 'calendar' ? (
+        <CalendarView tasks={viewTasks} onEdit={openEdit} onAddForDate={date => setForm({ ...emptyForm, due_date: date, assignee: activeTab === 'team' ? '' : activeTab })} />
+      ) : activeTab === 'team' ? (
         /* Team view: priority list + reminders */
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* Priority list */}
@@ -348,7 +368,11 @@ export default function Tasks() {
                   {colTasks.map(task => (
                     <div key={task.id} className="card p-3.5 space-y-2">
                       <div className="flex items-start justify-between gap-2">
-                        <p className={`text-sm font-medium ${task.status === 'done' ? 'text-slate-500 line-through' : 'text-white'}`}>
+                        <p
+                          onClick={() => openEdit(task)}
+                          title="Click to view details"
+                          className={`cursor-pointer text-sm font-medium ${task.status === 'done' ? 'text-slate-500 line-through' : 'text-white'}`}
+                        >
                           {task.title}
                         </p>
                         <div className="flex items-center gap-1 shrink-0">
@@ -419,8 +443,8 @@ export default function Tasks() {
                 onKeyDown={e => e.key === 'Enter' && saveTask()}
               />
               <textarea
-                className="input-dark w-full min-h-[80px]"
-                placeholder="Description (optional)"
+                className="input-dark w-full min-h-[120px]"
+                placeholder="Add details, context, links, notes…"
                 value={form.description}
                 onChange={e => setForm({ ...form, description: e.target.value })}
               />
@@ -481,7 +505,7 @@ function TeamRow({ task, showDue, onComplete, onEdit, onDelete }: {
       >
         <Check size={13} />
       </button>
-      <div className="flex-1 min-w-0">
+      <div className="flex-1 min-w-0 cursor-pointer" onClick={() => onEdit(task)} title="Click to view details">
         <p className="text-sm font-medium text-white truncate">{task.title}</p>
         <div className="flex items-center gap-2 flex-wrap mt-1">
           <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${PRIORITY_STYLES[task.priority]}`}>
@@ -524,5 +548,140 @@ function SubTab({ label, active, onClick }: { label: string; active: boolean; on
     >
       {label}
     </button>
+  )
+}
+
+function ViewButton({ icon: Icon, label, active, onClick }: { icon: any; label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      title={label}
+      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+        active ? 'bg-purple-600 text-white' : 'text-slate-400 hover:text-white'
+      }`}
+    >
+      <Icon size={14} />
+      <span className="hidden sm:inline">{label}</span>
+    </button>
+  )
+}
+
+function TaskListView({ tasks, onComplete, onEdit, onDelete }: {
+  tasks: Task[]
+  onComplete: (t: Task) => void
+  onEdit: (t: Task) => void
+  onDelete: (t: Task) => void
+}) {
+  const sorted = [...tasks].sort((a, b) => {
+    if ((a.status === 'done') !== (b.status === 'done')) return a.status === 'done' ? 1 : -1
+    return (a.due_date || '9999').localeCompare(b.due_date || '9999') ||
+      PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority]
+  })
+  return (
+    <div className="rounded-2xl bg-white/[0.03] border border-white/10 p-4">
+      <div className="space-y-2">
+        {sorted.map(task => (
+          <TeamRow key={task.id} task={task} showDue onComplete={onComplete} onEdit={onEdit} onDelete={onDelete} />
+        ))}
+        {sorted.length === 0 && <p className="text-xs text-slate-600 px-1 py-2">No tasks</p>}
+      </div>
+    </div>
+  )
+}
+
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+function CalendarView({ tasks, onEdit, onAddForDate }: {
+  tasks: Task[]
+  onEdit: (t: Task) => void
+  onAddForDate: (date: string) => void
+}) {
+  const [month, setMonth] = useState(() => {
+    const d = new Date()
+    return new Date(d.getFullYear(), d.getMonth(), 1)
+  })
+
+  const year = month.getFullYear()
+  const mon = month.getMonth()
+  const firstWeekday = new Date(year, mon, 1).getDay()
+  const daysInMonth = new Date(year, mon + 1, 0).getDate()
+  const todayIso = new Date().toLocaleDateString('en-CA')
+
+  const byDate = new Map<string, Task[]>()
+  for (const t of tasks) {
+    if (!t.due_date || t.status === 'done') continue
+    const list = byDate.get(t.due_date) || []
+    list.push(t)
+    byDate.set(t.due_date, list)
+  }
+
+  const cells: (string | null)[] = []
+  for (let i = 0; i < firstWeekday; i++) cells.push(null)
+  for (let d = 1; d <= daysInMonth; d++) {
+    cells.push(`${year}-${String(mon + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`)
+  }
+
+  return (
+    <div className="rounded-2xl bg-white/[0.03] border border-white/10 p-4">
+      <div className="flex items-center justify-between pb-4">
+        <button
+          onClick={() => setMonth(new Date(year, mon - 1, 1))}
+          className="p-1.5 text-slate-400 hover:text-white transition-colors"
+          title="Previous month"
+        >
+          <ChevronLeft size={18} />
+        </button>
+        <h2 className="text-base font-semibold text-white">
+          {month.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
+        </h2>
+        <button
+          onClick={() => setMonth(new Date(year, mon + 1, 1))}
+          className="p-1.5 text-slate-400 hover:text-white transition-colors"
+          title="Next month"
+        >
+          <ChevronRight size={18} />
+        </button>
+      </div>
+
+      <div className="grid grid-cols-7 gap-1">
+        {WEEKDAYS.map(d => (
+          <div key={d} className="text-center text-[10px] font-semibold text-slate-500 uppercase tracking-wide pb-2">{d}</div>
+        ))}
+        {cells.map((iso, i) => {
+          if (!iso) return <div key={`empty-${i}`} />
+          const dayTasks = byDate.get(iso) || []
+          const isToday = iso === todayIso
+          const isPast = iso < todayIso
+          return (
+            <div
+              key={iso}
+              onClick={() => onAddForDate(iso)}
+              className={`min-h-[80px] rounded-lg border p-1.5 cursor-pointer transition-colors hover:border-purple-500/40 ${
+                isToday ? 'border-purple-500/60 bg-purple-500/10' : 'border-white/10 bg-white/[0.02]'
+              }`}
+            >
+              <div className={`text-[10px] font-medium mb-1 ${isToday ? 'text-purple-300' : 'text-slate-500'}`}>
+                {Number(iso.slice(-2))}
+              </div>
+              <div className="space-y-1">
+                {dayTasks.map(t => (
+                  <button
+                    key={t.id}
+                    onClick={e => { e.stopPropagation(); onEdit(t) }}
+                    className={`block w-full text-left text-[10px] leading-tight px-1.5 py-1 rounded truncate border ${PRIORITY_STYLES[t.priority]} ${
+                      isPast ? 'opacity-80' : ''
+                    }`}
+                    title={t.title}
+                  >
+                    {t.title}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      <p className="text-[10px] text-slate-600 pt-3">Click a day to add a task due that day. Click a task to edit it.</p>
+    </div>
   )
 }

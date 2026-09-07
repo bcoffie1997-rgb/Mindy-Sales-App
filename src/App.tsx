@@ -1,28 +1,22 @@
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom'
-import { LayoutDashboard, Users, UserCheck, Phone, Mic, Building2, Target, Bot, Menu, X, Terminal, LockKeyhole, ListTodo } from 'lucide-react'
+import { Users, UserCheck, Phone, Building2, Bot, Menu, X, Terminal, LockKeyhole, ListTodo } from 'lucide-react'
 import { FormEvent, ReactNode, useEffect, useState } from 'react'
-import Dashboard from './components/Dashboard'
 import Tasks from './components/Tasks'
 import BDManagement from './components/BDManagement'
 import ClientsRevenue from './components/ClientsRevenue'
 import Leads from './components/Leads'
-import Enterprise from './components/Enterprise'
 import MindyCC from './components/MindyCC'
 import Calls from './components/Calls'
-import Fireflies from './components/Fireflies'
 import CommandCenter from './components/CommandCenter'
 import DetailView from './components/DetailView'
 
 const navItems = [
   { to: '/', icon: ListTodo, label: 'Tasks' },
-  { to: '/overview', icon: LayoutDashboard, label: 'Overview' },
   { to: '/manage', icon: Building2, label: 'BD / Consulting' },
   { to: '/clients', icon: UserCheck, label: 'Clients / Revenue' },
   { to: '/leads', icon: Users, label: 'Leads' },
-  { to: '/enterprise', icon: Target, label: 'Enterprise Leads' },
   { to: '/mindy-cc', icon: Bot, label: 'Mindy Command Center' },
-  { to: '/calls', icon: Phone, label: 'Scheduled Calls' },
-  { to: '/fireflies', icon: Mic, label: 'Fireflies Notes' },
+  { to: '/calls', icon: Phone, label: 'Calls' },
   { to: '/command-center', icon: Terminal, label: 'Command Center' },
 ]
 
@@ -177,17 +171,14 @@ function DashboardApp() {
         <main className="flex-1">
           <Routes>
             <Route path="/" element={<Tasks />} />
-            <Route path="/overview" element={<Dashboard />} />
             <Route path="/manage" element={<BDManagement />} />
             <Route path="/manage/:id" element={<DetailView mode="management" />} />
             <Route path="/clients" element={<ClientsRevenue />} />
             <Route path="/clients/:id" element={<DetailView mode="client" />} />
             <Route path="/leads" element={<Leads />} />
             <Route path="/leads/:id" element={<DetailView mode="lead" />} />
-            <Route path="/enterprise" element={<Enterprise />} />
             <Route path="/mindy-cc" element={<MindyCC />} />
             <Route path="/calls" element={<Calls />} />
-            <Route path="/fireflies" element={<Fireflies />} />
             <Route path="/command-center" element={<CommandCenter />} />
           </Routes>
         </main>
