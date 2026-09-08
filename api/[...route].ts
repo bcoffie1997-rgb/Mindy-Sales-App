@@ -1128,11 +1128,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const b = req.body || {}
       const title = typeof b.title === 'string' ? b.title.trim() : ''
       if (!title) return res.status(400).json({ error: 'Title is required' })
-      const { data, error } = await supabase.from('team_documents').insert({
+      const row = {
         title,
         url: typeof b.url === 'string' && b.url.trim() ? b.url.trim() : null,
         content: typeof b.content === 'string' && b.content.trim() ? b.content.trim() : null,
-      }).select().single()
+      }
+      let { data, error } = await supabase.from('team_documents').insert(row).select().single()
+      // Older tables may not have the content column yet — save without it rather than fail
+      if (error && /'content' column/i.test(error.message || '')) {
+        ;({ data, error } = await supabase.from('team_documents').insert({ title: row.title, url: row.url }).select().single())
+      }
       if (error) throw error
       return res.json(data)
     }
