@@ -81,10 +81,10 @@ export default function Tasks() {
         apiJSON<TeamMember[]>('/api/team-members'),
       ])
       setTasks(t)
-      const pinLast = ['Branden', 'Eric Coffie']
+      const pinLast = ['branden', 'eric coffie']
       setMembers([...m].sort((a, b) => {
-        const pa = pinLast.includes(a.name) ? 1 : 0
-        const pb = pinLast.includes(b.name) ? 1 : 0
+        const pa = pinLast.includes(a.name.toLowerCase()) ? 1 : 0
+        const pb = pinLast.includes(b.name.toLowerCase()) ? 1 : 0
         return pa - pb || a.name.localeCompare(b.name)
       }))
       setError('')
@@ -150,7 +150,7 @@ export default function Tasks() {
         priority: form.priority,
         due_date: form.due_date || null,
       }
-      if (form.asReminder) payload.status = 'reminder'
+      if (form.asReminder && form.origStatus !== 'done') payload.status = 'reminder'
       else if (form.origStatus === 'reminder') payload.status = 'todo'
       if (form.id) {
         await patchTask(form.id, payload)
@@ -178,8 +178,9 @@ export default function Tasks() {
     try {
       await patchTask(task.id, { status: next.key })
     } catch (err) {
-      setError(errorMessage(err))
+      const msg = errorMessage(err)
       await load()
+      setError(msg)
     }
   }
 
@@ -188,8 +189,9 @@ export default function Tasks() {
     try {
       await patchTask(task.id, { status: 'done' })
     } catch (err) {
-      setError(errorMessage(err))
+      const msg = errorMessage(err)
       await load()
+      setError(msg)
     }
   }
 
@@ -199,8 +201,9 @@ export default function Tasks() {
     try {
       await apiJSON(`/api/tasks?id=${task.id}`, { method: 'DELETE' })
     } catch (err) {
-      setError(errorMessage(err))
+      const msg = errorMessage(err)
       await load()
+      setError(msg)
     }
   }
 
@@ -324,7 +327,7 @@ export default function Tasks() {
       </div>
 
       {view === 'list' ? (
-        <TaskListView tasks={viewTasks} onComplete={completeTask} onEdit={openEdit} onDelete={deleteTask} />
+        <TaskListView tasks={viewTasks} showPriority={activeTab !== 'team'} onComplete={completeTask} onEdit={openEdit} onDelete={deleteTask} />
       ) : view === 'calendar' ? (
         <CalendarView tasks={viewTasks} onEdit={openEdit} onAddForDate={date => setForm({ ...emptyForm, due_date: date, assignee: activeTab === 'team' ? '' : activeTab })} />
       ) : activeTab === 'team' ? (
@@ -374,7 +377,7 @@ export default function Tasks() {
         /* Member view: kanban board */
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {COLUMNS.map(col => {
-            const colTasks = visibleTasks.filter(t => t.status === col.key)
+            const colTasks = visibleTasks.filter(t => t.status === col.key || (col.key === 'todo' && t.status === 'reminder'))
             return (
               <div key={col.key} className="rounded-2xl bg-white/[0.03] border border-white/10 p-3 min-h-[120px]">
                 <div className="flex items-center justify-between px-1 pb-3">
@@ -596,8 +599,9 @@ function ViewButton({ icon: Icon, label, active, onClick }: { icon: any; label: 
   )
 }
 
-function TaskListView({ tasks, onComplete, onEdit, onDelete }: {
+function TaskListView({ tasks, showPriority = true, onComplete, onEdit, onDelete }: {
   tasks: Task[]
+  showPriority?: boolean
   onComplete: (t: Task) => void
   onEdit: (t: Task) => void
   onDelete: (t: Task) => void
@@ -611,7 +615,7 @@ function TaskListView({ tasks, onComplete, onEdit, onDelete }: {
     <div className="rounded-2xl bg-white/[0.03] border border-white/10 p-4">
       <div className="space-y-2">
         {sorted.map(task => (
-          <TeamRow key={task.id} task={task} showDue onComplete={onComplete} onEdit={onEdit} onDelete={onDelete} />
+          <TeamRow key={task.id} task={task} showDue showPriority={showPriority} onComplete={onComplete} onEdit={onEdit} onDelete={onDelete} />
         ))}
         {sorted.length === 0 && <p className="text-xs text-slate-600 px-1 py-2">No tasks</p>}
       </div>

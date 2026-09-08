@@ -260,8 +260,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       for (const t of open || []) {
         const p = autoPriority(t.due_date)
         if (p !== t.priority) {
-          await supabase.from('tasks').update({ priority: p }).eq('id', t.id)
-          if (p === 'high') {
+          const { error: upErr } = await supabase.from('tasks').update({ priority: p }).eq('id', t.id)
+          if (!upErr && p === 'high') {
             bumped++
             await notifySlack(`🔥 Now HIGH priority (due ${t.due_date}): *${t.title}*${t.assignee ? ` — ${t.assignee}` : ''}`)
             if (t.assignee) await slackDM(t.assignee, `🔥 Your task *${t.title}* is now HIGH priority — due ${t.due_date}.`)
@@ -1037,11 +1037,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         updates.completed_at = b.status === 'done' ? new Date().toISOString() : null
       }
       const { data, error } = await supabase.from('tasks').update(updates).eq('id', id).select().single()
-      if (error) throw error
-      // Due date set/changed → priority follows the automatic rules
+      if (error) {
+        if (error.code === 'PGRST116') return res.status(404).json({ error: 'Task not found' })
+        throw error
+      }
+      // Due date set/changed/cleared → priority follows the automatic rules
       if (updates.due_date !== undefined && data.status !== 'done') {
         const p = autoPriority(data.due_date || '')
-        if (data.due_date && p !== data.priority) {
+        if (p !== data.priority) {
           await supabase.from('tasks').update({ priority: p }).eq('id', id)
           data.priority = p
         }
@@ -1124,6 +1127,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (path === 'team-members' && method === 'DELETE') {
       const id = Number(req.query.id)
       if (!id) return res.status(400).json({ error: 'Member id is required' })
+      const { data: member, error: findErr } = await supabase.from('team_members').select('name').eq('id', id).single()
+      if (findErr) {
+        if (findErr.code === 'PGRST116') return res.status(404).json({ error: 'Member not found' })
+        throw findErr
+      }
+      // Their tasks move back to the Team board instead of becoming unreachable
+      await supabase.from('tasks').update({ assignee: null }).eq('assignee', member.name)
       const { error } = await supabase.from('team_members').delete().eq('id', id)
       if (error) throw error
       return res.json({ ok: true })
