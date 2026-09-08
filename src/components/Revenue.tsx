@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { DollarSign, TrendingUp, TrendingDown, CreditCard, RefreshCw, ArrowUpRight, Users, FileText, Search, ChevronDown, ChevronUp, AlertCircle } from 'lucide-react'
+import { DollarSign, TrendingUp, TrendingDown, CreditCard, RefreshCw, ArrowUpRight, Users, FileText, Search, ChevronDown, ChevronUp, AlertCircle, RotateCcw } from 'lucide-react'
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { apiJSON, errorMessage } from '../lib/api'
 
@@ -43,6 +43,7 @@ interface ReportData {
 interface Transaction {
   id: string; amount: number; currency: string; description: string
   customer_email: string; customer_name: string; date: string; status: string
+  refunded?: boolean
   client_match: { id: string; name: string; type: string; score: string; client_tier: string } | null
   platform: string | null
 }
@@ -90,6 +91,29 @@ export default function Revenue() {
   const [txResults, setTxResults] = useState<any[] | null>(null)
   const [txTotal, setTxTotal] = useState(0)
   const [txLoading, setTxLoading] = useState(false)
+
+  // Refunds
+  const [refundedIds, setRefundedIds] = useState<string[]>([])
+  const [refunding, setRefunding] = useState<string | null>(null)
+
+  const refundTx = async (tx: any) => {
+    if (!window.confirm(`Refund ${fmtFull(tx.amount)} to ${tx.customer_name || tx.customer_email || 'this customer'}?\n\nThis sends the money back through Stripe and cannot be undone.`)) return
+    setRefunding(tx.id)
+    setActionError('')
+    try {
+      await apiJSON('/api/stripe-refund', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ charge: tx.id }),
+      })
+      setRefundedIds(prev => [...prev, tx.id])
+      load()
+    } catch (err) {
+      setActionError(errorMessage(err))
+    } finally {
+      setRefunding(null)
+    }
+  }
 
   // Cross-reference
   const [crossRef, setCrossRef] = useState<any>(null)
@@ -381,6 +405,7 @@ export default function Revenue() {
                 <th className="pb-2 font-medium">CRM Match</th>
                 <th className="pb-2 font-medium text-right">Amount</th>
                 <th className="pb-2 font-medium text-right">Date</th>
+                <th className="pb-2 font-medium text-right">Refund</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
@@ -402,10 +427,24 @@ export default function Revenue() {
                   <td className="py-2 text-right text-slate-500 text-xs whitespace-nowrap">
                     {new Date(tx.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })}
                   </td>
+                  <td className="py-2 text-right whitespace-nowrap">
+                    {tx.refunded || refundedIds.includes(tx.id) ? (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/15 text-red-300 border border-red-500/30">Refunded</span>
+                    ) : (
+                      <button
+                        onClick={() => refundTx(tx)}
+                        disabled={refunding === tx.id}
+                        className="text-[10px] px-2 py-1 rounded border border-white/10 text-slate-400 hover:text-red-300 hover:border-red-500/40 transition-colors disabled:opacity-50 inline-flex items-center gap-1"
+                        title="Issue a full refund through Stripe"
+                      >
+                        <RotateCcw size={10} /> {refunding === tx.id ? 'Refunding…' : 'Refund'}
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
               {txResults && txResults.length === 0 && (
-                <tr><td colSpan={5} className="py-8 text-center text-slate-500 text-sm">No transactions match "{txSearch}"</td></tr>
+                <tr><td colSpan={6} className="py-8 text-center text-slate-500 text-sm">No transactions match "{txSearch}"</td></tr>
               )}
             </tbody>
           </table>

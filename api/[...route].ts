@@ -428,7 +428,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const thisMonthCharges = allCharges.filter(c=>c.created>=Math.floor(startOfMonth.getTime()/1000))
       const dailyRevenue:Record<string,number> = {}
       for (const c of thisMonthCharges) { const day=new Date(c.created*1000).toISOString().slice(0,10); dailyRevenue[day]=(dailyRevenue[day]||0)+c.amount/100 }
-      const recentTransactions = allCharges.slice(0,30).map((c:any) => { const email=c.billing_details?.email||c.receipt_email||'', name=c.billing_details?.name||'', match=matchStripeToLead(email,name,allLeads||[]); return {id:c.id,amount:c.amount/100,currency:c.currency,description:c.description||c.metadata?.product||'Payment',customer_email:email,customer_name:name,date:new Date(c.created*1000).toISOString(),status:c.status,client_match:match?{id:match.id,name:match.name,type:match.type,score:match.score,client_tier:match.client_tier}:null,platform:c.metadata?.platform||null} })
+      const recentTransactions = allCharges.slice(0,30).map((c:any) => { const email=c.billing_details?.email||c.receipt_email||'', name=c.billing_details?.name||'', match=matchStripeToLead(email,name,allLeads||[]); return {id:c.id,amount:c.amount/100,currency:c.currency,description:c.description||c.metadata?.product||'Payment',customer_email:email,customer_name:name,date:new Date(c.created*1000).toISOString(),status:c.status,refunded:!!c.refunded,client_match:match?{id:match.id,name:match.name,type:match.type,score:match.score,client_tier:match.client_tier}:null,platform:c.metadata?.platform||null} })
       const productGroups:Record<string,{name:string;count:number;total:number;customers:string[]}> = {}
       for (const c of allCharges) { const rawDesc=c.description||c.metadata?.memberpress_product||c.metadata?.product||'Other'; let group=rawDesc; if(/subscription (update|creation)/i.test(rawDesc))group='Mighty Networks / Subscription'; else if(/ai tools.*crm.*research/i.test(rawDesc))group='AI Tools + CRM + Research'; else if(/ai tools/i.test(rawDesc))group='AI Tools'; if(!productGroups[group])productGroups[group]={name:group,count:0,total:0,customers:[]}; productGroups[group].count++; productGroups[group].total+=c.amount/100; const cn=c.billing_details?.name||c.receipt_email||'Unknown'; if(!productGroups[group].customers.includes(cn))productGroups[group].customers.push(cn) }
       const mom = lastMonth>0?((thisMonth-lastMonth)/lastMonth*100).toFixed(1):null
@@ -511,9 +511,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const now=new Date(),twelveMonthsAgo=new Date(now.getFullYear(),now.getMonth()-12,1)
       const [allCharges,allLeads]=await Promise.all([fetchAllCharges(twelveMonthsAgo),fetchAllRows('leads','id,name,email,type,score,client_tier,status')])
       const q=((req.query.q as string)||'').toLowerCase()
-      const transactions=allCharges.map((c:any)=>{ const email=c.billing_details?.email||c.receipt_email||'',name=c.billing_details?.name||'',desc=c.description||c.metadata?.memberpress_product||c.metadata?.product||'',match=matchStripeToLead(email,name,allLeads||[]); return {id:c.id,amount:c.amount/100,currency:c.currency,description:desc,customer_email:email,customer_name:name,date:new Date(c.created*1000).toISOString(),client_match:match?{id:match.id,name:match.name,type:match.type,score:match.score,client_tier:match.client_tier,status:match.status}:null,platform:c.metadata?.platform||null} })
+      const transactions=allCharges.map((c:any)=>{ const email=c.billing_details?.email||c.receipt_email||'',name=c.billing_details?.name||'',desc=c.description||c.metadata?.memberpress_product||c.metadata?.product||'',match=matchStripeToLead(email,name,allLeads||[]); return {id:c.id,amount:c.amount/100,currency:c.currency,description:desc,customer_email:email,customer_name:name,date:new Date(c.created*1000).toISOString(),refunded:!!c.refunded,client_match:match?{id:match.id,name:match.name,type:match.type,score:match.score,client_tier:match.client_tier,status:match.status}:null,platform:c.metadata?.platform||null} })
       const filtered=q?transactions.filter((t:any)=>t.customer_name.toLowerCase().includes(q)||t.customer_email.toLowerCase().includes(q)||t.description.toLowerCase().includes(q)||(t.client_match?.name||'').toLowerCase().includes(q)):transactions
       return res.json({ enabled:true,total:transactions.length,results:filtered })
+    }
+
+    // POST /api/stripe-refund  { charge: 'ch_...' } — full refund, cannot be undone
+    if (path === 'stripe-refund' && method === 'POST') {
+      const stripe = getStripe()
+      if (!stripe) return res.status(503).json({ error: 'Stripe not configured' })
+      const chargeId = typeof req.body?.charge === 'string' ? req.body.charge.trim() : ''
+      if (!chargeId) return res.status(400).json({ error: 'Charge id is required' })
+      let charge: any
+      try {
+        charge = await stripe.charges.retrieve(chargeId)
+      } catch (err: any) {
+        if (err?.code === 'resource_missing') return res.status(404).json({ error: 'Charge not found in Stripe' })
+        throw err
+      }
+      if (charge.refunded) return res.status(409).json({ error: 'That payment was already refunded' })
+      const refund = await stripe.refunds.create({ charge: chargeId })
+      // Bust the charges cache so revenue numbers refresh on next load
+      await supabase.from('stripe_cache').upsert({ id: 1, data: [], fetched_at: new Date(0).toISOString() })
+      const who = charge.billing_details?.name || charge.billing_details?.email || charge.receipt_email || 'customer'
+      await notifySlack(`💸 Refund issued: *$${(charge.amount / 100).toFixed(2)}* — ${charge.description || 'Payment'} (${who})`)
+      return res.json({ ok: true, refund: { id: refund.id, amount: refund.amount / 100, status: refund.status } })
     }
 
     // POST /api/seed-from-stripe (protected by the dashboard session)
