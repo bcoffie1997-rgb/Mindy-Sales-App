@@ -538,6 +538,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.json({ ok: true, refund: { id: refund.id, amount: refund.amount / 100, status: refund.status } })
     }
 
+    // POST /api/stripe-cancel-sub  { subscription: 'sub_...' } — cancels immediately
+    if (path === 'stripe-cancel-sub' && method === 'POST') {
+      const stripe = getStripe()
+      if (!stripe) return res.status(503).json({ error: 'Stripe not configured' })
+      const subId = typeof req.body?.subscription === 'string' ? req.body.subscription.trim() : ''
+      if (!subId) return res.status(400).json({ error: 'Subscription id is required' })
+      let canceled: any
+      try {
+        canceled = await stripe.subscriptions.cancel(subId)
+      } catch (err: any) {
+        if (err?.code === 'resource_missing') return res.status(404).json({ error: 'Subscription not found in Stripe' })
+        throw err
+      }
+      const item = canceled.items?.data?.[0]
+      const amount = item?.price?.unit_amount ? item.price.unit_amount / 100 : 0
+      const interval = item?.price?.recurring?.interval || 'mo'
+      const custObj = canceled.customer
+      const who = (typeof custObj === 'object' && custObj !== null && !(custObj as any).deleted) ? ((custObj as any).name || (custObj as any).email || 'customer') : 'customer'
+      await notifySlack(`🚫 Subscription canceled: ${who} — $${amount.toFixed(2)}/${interval}`)
+      return res.json({ ok: true, status: canceled.status })
+    }
+
     // POST /api/seed-from-stripe (protected by the dashboard session)
     // One-time: reconstruct client roster from Stripe payers into Supabase
     if (path === 'seed-from-stripe') {

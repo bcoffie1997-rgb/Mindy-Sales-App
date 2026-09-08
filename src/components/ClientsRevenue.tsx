@@ -1,11 +1,13 @@
 import { useState } from 'react'
-import { UserCheck, DollarSign } from 'lucide-react'
+import { UserCheck, DollarSign, CreditCard } from 'lucide-react'
 import ClientsList from './ClientsList'
 import Revenue from './Revenue'
+import Payments from './Payments'
 
 const tabs = [
   { key: 'clients', label: 'Clients', icon: UserCheck },
   { key: 'revenue', label: 'Revenue', icon: DollarSign },
+  { key: 'payments', label: 'Payments', icon: CreditCard },
 ]
 
 export default function ClientsRevenue() {
@@ -30,7 +32,7 @@ export default function ClientsRevenue() {
           ))}
         </div>
       </div>
-      {activeTab === 'clients' ? <ClientsList /> : <Revenue />}
+      {activeTab === 'clients' ? <ClientsList /> : activeTab === 'revenue' ? <Revenue /> : <Payments />}
     </div>
   )
 }
