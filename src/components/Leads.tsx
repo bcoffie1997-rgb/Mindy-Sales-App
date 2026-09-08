@@ -48,7 +48,7 @@ function fmtDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-function LeadsList() {
+function LeadsList({ sourceFilter }: { sourceFilter?: string }) {
   const navigate = useNavigate()
   const [leads, setLeads] = useState<Lead[]>([])
   const [search, setSearch] = useState('')
@@ -99,6 +99,7 @@ function LeadsList() {
 
   const filtered = leads
     .filter(l => {
+      if (sourceFilter && l.source !== sourceFilter) return false
       if (scoreFilter !== 'all' && l.score !== scoreFilter) return false
       if (statusFilter !== 'all' && l.status !== statusFilter) return false
       if (search) {
@@ -324,15 +325,16 @@ function LeadsList() {
 }
 
 export default function Leads() {
-  const [tab, setTab] = useState<'leads' | 'enterprise'>('leads')
+  const [tab, setTab] = useState<'leads' | 'enterprise' | 'conference'>('leads')
 
   return (
     <div>
       <div className="flex items-center gap-1 px-4 sm:px-6 border-b border-white/10">
         <PageTab label="Sales Leads" active={tab === 'leads'} onClick={() => setTab('leads')} />
         <PageTab label="Enterprise" active={tab === 'enterprise'} onClick={() => setTab('enterprise')} />
+        <PageTab label="Conference Leads" active={tab === 'conference'} onClick={() => setTab('conference')} />
       </div>
-      {tab === 'leads' ? <LeadsList /> : <Enterprise />}
+      {tab === 'leads' ? <LeadsList /> : tab === 'enterprise' ? <Enterprise /> : <LeadsList sourceFilter="Conference" />}
     </div>
   )
 }

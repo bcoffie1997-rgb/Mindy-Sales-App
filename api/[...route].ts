@@ -373,6 +373,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
+    // POST /api/import-leads  { leads: [...] } — bulk upsert by id
+    if (path === 'import-leads' && method === 'POST') {
+      const list = Array.isArray(req.body?.leads) ? req.body.leads : []
+      if (!list.length) return res.status(400).json({ error: 'leads array is required' })
+      const rows = list.map((l: any, i: number) => ({
+        id: typeof l.id === 'string' && l.id ? l.id : `import-${Date.now()}-${i}`,
+        type: typeof l.type === 'string' && l.type ? l.type : 'lead',
+        name: typeof l.name === 'string' ? l.name.trim() : '',
+        email: typeof l.email === 'string' ? l.email : null,
+        phone: typeof l.phone === 'string' ? l.phone : null,
+        company: typeof l.company === 'string' ? l.company : null,
+        score: typeof l.score === 'string' ? l.score : 'warm',
+        source: typeof l.source === 'string' ? l.source : null,
+        status: typeof l.status === 'string' ? l.status : 'new',
+        notes: typeof l.notes === 'string' ? l.notes : null,
+        metadata: l.metadata && typeof l.metadata === 'object' ? l.metadata : {},
+      })).filter((r: any) => r.name)
+      if (!rows.length) return res.status(400).json({ error: 'No valid leads (name required)' })
+      const { error, count } = await supabase.from('leads').upsert(rows, { onConflict: 'id', count: 'exact' })
+      if (error) throw error
+      return res.json({ ok: true, upserted: count ?? rows.length })
+    }
+
     // GET /api/calls
     if (path === 'calls') {
       const { data } = await supabase.from('calls_cache').select('payload').eq('id',1).single()
