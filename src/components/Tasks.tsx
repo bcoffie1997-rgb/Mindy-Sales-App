@@ -728,6 +728,34 @@ interface TeamDocument {
   created_at: string
 }
 
+function driveFileId(url: string): string | null {
+  const m = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || url.match(/[?&]id=([a-zA-Z0-9_-]+)/)
+  return m ? m[1] : null
+}
+
+function DocPreview({ url }: { url: string }) {
+  const [failed, setFailed] = useState(false)
+  const id = driveFileId(url)
+  if (!id || failed) {
+    return (
+      <div className="w-20 h-14 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center shrink-0">
+        <FileText size={16} className="text-slate-500" />
+      </div>
+    )
+  }
+  return (
+    <a href={url} target="_blank" rel="noreferrer" className="shrink-0" title="Open document">
+      <img
+        src={`https://drive.google.com/thumbnail?id=${id}&sz=w200`}
+        alt=""
+        loading="lazy"
+        onError={() => setFailed(true)}
+        className="w-20 h-14 rounded-lg object-cover border border-white/10 hover:border-purple-400/50 transition-colors"
+      />
+    </a>
+  )
+}
+
 function TeamDocuments() {
   const [docs, setDocs] = useState<TeamDocument[]>([])
   const [loading, setLoading] = useState(true)
@@ -827,7 +855,7 @@ function TeamDocuments() {
       <div className="space-y-2">
         {docs.map(doc => (
           <div key={doc.id} className="card p-3.5 flex items-start gap-3">
-            <FileText size={16} className="text-slate-500 mt-0.5 shrink-0" />
+            {doc.url ? <DocPreview url={doc.url} /> : <FileText size={16} className="text-slate-500 mt-0.5 shrink-0" />}
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium text-white">{doc.title}</p>
               {doc.url && (
