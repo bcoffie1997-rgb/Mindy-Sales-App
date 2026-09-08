@@ -327,7 +327,7 @@ export default function Tasks() {
       </div>
 
       {view === 'list' ? (
-        <TaskListView tasks={viewTasks} showPriority={activeTab !== 'team'} onComplete={completeTask} onEdit={openEdit} onDelete={deleteTask} />
+        <TaskListView tasks={viewTasks} showPriority={activeTab !== 'team'} permanent={activeTab === 'team'} onComplete={completeTask} onEdit={openEdit} onDelete={deleteTask} />
       ) : view === 'calendar' ? (
         <CalendarView tasks={viewTasks} onEdit={openEdit} onAddForDate={date => setForm({ ...emptyForm, due_date: date, assignee: activeTab === 'team' ? '' : activeTab })} />
       ) : activeTab === 'team' ? (
@@ -348,7 +348,7 @@ export default function Tasks() {
               </div>
               <div className="space-y-2">
                 {priorityList.map(task => (
-                  <TeamRow key={task.id} task={task} showPriority={false} onComplete={completeTask} onEdit={openEdit} onDelete={deleteTask} />
+                  <TeamRow key={task.id} task={task} showPriority={false} permanent onComplete={completeTask} onEdit={openEdit} onDelete={deleteTask} />
                 ))}
                 {priorityList.length === 0 && <p className="text-xs text-slate-600 px-1 py-2">No open tasks</p>}
               </div>
@@ -364,7 +364,7 @@ export default function Tasks() {
               </div>
               <div className="space-y-2">
                 {reminderList.map(task => (
-                  <TeamRow key={task.id} task={task} showDue showPriority={false} onComplete={completeTask} onEdit={openEdit} onDelete={deleteTask} />
+                  <TeamRow key={task.id} task={task} showDue showPriority={false} permanent onComplete={completeTask} onEdit={openEdit} onDelete={deleteTask} />
                 ))}
                 {reminderList.length === 0 && <p className="text-xs text-slate-600 px-1 py-2">No reminders — check "Reminder" when creating a task</p>}
               </div>
@@ -518,10 +518,11 @@ export default function Tasks() {
   )
 }
 
-function TeamRow({ task, showDue, showPriority = true, onComplete, onEdit, onDelete }: {
+function TeamRow({ task, showDue, showPriority = true, permanent = false, onComplete, onEdit, onDelete }: {
   task: Task
   showDue?: boolean
   showPriority?: boolean
+  permanent?: boolean
   onComplete: (t: Task) => void
   onEdit: (t: Task) => void
   onDelete: (t: Task) => void
@@ -529,13 +530,17 @@ function TeamRow({ task, showDue, showPriority = true, onComplete, onEdit, onDel
   const due = dueState(task.due_date, task.status)
   return (
     <div className="card p-3 flex items-center gap-3">
-      <button
-        onClick={() => onComplete(task)}
-        title="Mark done"
-        className="w-5 h-5 rounded-md border border-slate-600 hover:border-emerald-400 hover:text-emerald-400 text-transparent flex items-center justify-center shrink-0 transition-colors"
-      >
-        <Check size={13} />
-      </button>
+      {permanent ? (
+        <Flag size={14} className="text-purple-400 shrink-0" />
+      ) : (
+        <button
+          onClick={() => onComplete(task)}
+          title="Mark done"
+          className="w-5 h-5 rounded-md border border-slate-600 hover:border-emerald-400 hover:text-emerald-400 text-transparent flex items-center justify-center shrink-0 transition-colors"
+        >
+          <Check size={13} />
+        </button>
+      )}
       <div className="flex-1 min-w-0 cursor-pointer" onClick={() => onEdit(task)} title="Click to view details">
         <p className="text-sm font-medium text-white truncate">{task.title}</p>
         <div className="flex items-center gap-2 flex-wrap mt-1">
@@ -563,9 +568,11 @@ function TeamRow({ task, showDue, showPriority = true, onComplete, onEdit, onDel
         <button onClick={() => onEdit(task)} className="text-slate-500 hover:text-white transition-colors" title="Edit">
           <Pencil size={14} />
         </button>
-        <button onClick={() => onDelete(task)} className="text-slate-500 hover:text-red-400 transition-colors" title="Delete">
-          <Trash2 size={14} />
-        </button>
+        {!permanent && (
+          <button onClick={() => onDelete(task)} className="text-slate-500 hover:text-red-400 transition-colors" title="Delete">
+            <Trash2 size={14} />
+          </button>
+        )}
       </div>
     </div>
   )
@@ -599,9 +606,10 @@ function ViewButton({ icon: Icon, label, active, onClick }: { icon: any; label: 
   )
 }
 
-function TaskListView({ tasks, showPriority = true, onComplete, onEdit, onDelete }: {
+function TaskListView({ tasks, showPriority = true, permanent = false, onComplete, onEdit, onDelete }: {
   tasks: Task[]
   showPriority?: boolean
+  permanent?: boolean
   onComplete: (t: Task) => void
   onEdit: (t: Task) => void
   onDelete: (t: Task) => void
@@ -615,7 +623,7 @@ function TaskListView({ tasks, showPriority = true, onComplete, onEdit, onDelete
     <div className="rounded-2xl bg-white/[0.03] border border-white/10 p-4">
       <div className="space-y-2">
         {sorted.map(task => (
-          <TeamRow key={task.id} task={task} showDue showPriority={showPriority} onComplete={onComplete} onEdit={onEdit} onDelete={onDelete} />
+          <TeamRow key={task.id} task={task} showDue showPriority={showPriority} permanent={permanent} onComplete={onComplete} onEdit={onEdit} onDelete={onDelete} />
         ))}
         {sorted.length === 0 && <p className="text-xs text-slate-600 px-1 py-2">No tasks</p>}
       </div>
