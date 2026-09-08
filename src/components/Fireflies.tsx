@@ -54,10 +54,16 @@ export default function Fireflies() {
 
   async function runSync() {
     setSyncing(true)
+    setError('')
+    let skip = 0
     try {
-      const json = await apiJSON<any>('/api/sync-fireflies', { method: 'POST' })
-      if (json.ok) await load()
-      else setError('Sync error: ' + (json.error || JSON.stringify(json)))
+      for (let guard = 0; guard < 20; guard++) {
+        const json = await apiJSON<any>(`/api/sync-fireflies?skip=${skip}`, { method: 'POST' })
+        if (!json.ok) { setError('Sync error: ' + (json.error || JSON.stringify(json))); break }
+        if (!json.nextSkip) break
+        skip = json.nextSkip
+      }
+      await load()
     } catch (err) {
       setError(errorMessage(err))
     } finally {

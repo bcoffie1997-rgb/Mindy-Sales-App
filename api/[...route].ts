@@ -800,26 +800,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
       }`
 
-      const allTranscripts: any[] = []
-      let skip = 0
+      // One batch per request (the button loops with ?skip=) so we never hit the 30s function limit
+      const skip = Math.max(0, Number(req.query.skip) || 0)
       const limit = 25
-      while (true) {
-        const resp = await fetch('https://api.fireflies.ai/graphql', {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${FF_KEY}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: ffQuery, variables: { limit, skip } })
-        })
-        if (!resp.ok) {
-          const txt = await resp.text()
-          return res.status(502).json({ error: `Fireflies API error ${resp.status}`, detail: txt.slice(0, 500) })
+      const resp = await fetch('https://api.fireflies.ai/graphql', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${FF_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: ffQuery, variables: { limit, skip } })
+      })
+      if (!resp.ok) {
+        const txt = await resp.text()
+        return res.status(502).json({ error: `Fireflies API error ${resp.status}`, detail: txt.slice(0, 500) })
+      }
+      const json: any = await resp.json()
+      if (json.errors) return res.status(502).json({ error: 'Fireflies GraphQL error', detail: json.errors })
+      const batch: any[] = json.data?.transcripts || []
+
+      // Everything in this batch already synced → we're caught up, stop early
+      if (batch.length > 0) {
+        const { data: existing } = await supabase.from('transcripts').select('id').in('id', batch.map((t: any) => t.id))
+        if ((existing || []).length === batch.length) {
+          return res.json({ ok: true, upserted: 0, nextSkip: null, caughtUp: true })
         }
-        const json: any = await resp.json()
-        if (json.errors) return res.status(502).json({ error: 'Fireflies GraphQL error', detail: json.errors })
-        const batch: any[] = json.data?.transcripts || []
-        allTranscripts.push(...batch)
-        if (batch.length < limit) break
-        skip += limit
-        if (skip > 400) break // safety cap (~400 most recent calls)
       }
 
       // Load existing leads/clients for email matching
@@ -827,7 +829,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const leadByEmail: Record<string, any> = {}
       for (const l of (allLeads || [])) { if (l.email) leadByEmail[l.email.toLowerCase()] = l }
 
-      const rows = allTranscripts.map((t: any) => {
+      const rows = batch.map((t: any) => {
         const attendees = t.meeting_attendees || []
         const emails = attendees.map((a: any) => (a.email || '').toLowerCase()).filter(Boolean)
         let matched: any = null
@@ -851,18 +853,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       })
 
       let upserted = 0
-      for (let i = 0; i < rows.length; i += 100) {
-        const batch = rows.slice(i, i + 100)
-        const { error } = await supabase.from('transcripts').upsert(batch, { onConflict: 'id' })
-        if (error) return res.status(500).json({ error: error.message, upsertedSoFar: upserted })
-        upserted += batch.length
+      if (rows.length) {
+        const { error } = await supabase.from('transcripts').upsert(rows, { onConflict: 'id' })
+        if (error) return res.status(500).json({ error: error.message, upsertedSoFar: 0 })
+        upserted = rows.length
       }
 
       return res.json({
         ok: true,
-        transcriptsFound: allTranscripts.length,
         upserted,
-        matchedToLeads: rows.filter((r: any) => r.matched_lead_id).length
+        matchedToLeads: rows.filter((r: any) => r.matched_lead_id).length,
+        nextSkip: batch.length === limit && skip + limit <= 400 ? skip + limit : null
       })
     }
 

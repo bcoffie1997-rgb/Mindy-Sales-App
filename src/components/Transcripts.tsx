@@ -60,11 +60,16 @@ export default function Transcripts() {
 
   async function runSync() {
     setSyncing(true)
+    let skip = 0
     try {
-      const res = await fetch('/api/sync-fireflies', { method: 'POST' })
-      const json = await res.json()
-      if (json.ok) await load()
-      else alert('Sync error: ' + (json.error || JSON.stringify(json)))
+      for (let guard = 0; guard < 20; guard++) {
+        const res = await fetch(`/api/sync-fireflies?skip=${skip}`, { method: 'POST' })
+        const json = await res.json()
+        if (!json.ok) { alert('Sync error: ' + (json.error || JSON.stringify(json))); return }
+        if (!json.nextSkip) break
+        skip = json.nextSkip
+      }
+      await load()
     } finally {
       setSyncing(false)
     }
