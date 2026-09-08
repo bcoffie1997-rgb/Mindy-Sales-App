@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Search, ChevronDown, ChevronUp, ExternalLink, RefreshCw, ArrowRight } from 'lucide-react'
+import { Search, ChevronDown, ChevronUp, ExternalLink, RefreshCw, ArrowRight, Download } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { apiJSON, errorMessage } from '../lib/api'
 import Enterprise from './Enterprise'
@@ -142,6 +142,25 @@ function LeadsList({ sourceFilter }: { sourceFilter?: string }) {
   const statuses = [...new Set(leads.map(l => l.status))].sort()
   const scores = [...new Set(leads.map(l => l.score))].sort()
 
+  const exportCsv = () => {
+    const cols: { key: keyof Lead; label: string }[] = [
+      { key: 'name', label: 'Name' }, { key: 'email', label: 'Email' }, { key: 'phone', label: 'Phone' },
+      { key: 'company', label: 'Company' }, { key: 'score', label: 'Score' }, { key: 'source', label: 'Source' },
+      { key: 'status', label: 'Status' }, { key: 'first_contact_date', label: 'First Contact' },
+      { key: 'last_action', label: 'Last Action' }, { key: 'last_action_date', label: 'Last Action Date' },
+      { key: 'follow_up_count', label: 'Follow Ups' }, { key: 'notes', label: 'Notes' },
+    ]
+    const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`
+    const rows = [cols.map(c => esc(c.label)).join(',')]
+    for (const l of filtered) rows.push(cols.map(c => esc(l[c.key])).join(','))
+    const blob = new Blob(['﻿' + rows.join('\n')], { type: 'text/csv;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `leads-${sourceFilter ? sourceFilter.toLowerCase() + '-' : ''}${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
+
   return (
     <div className="p-4 sm:p-6 space-y-4">
       {/* Header */}
@@ -151,6 +170,14 @@ function LeadsList({ sourceFilter }: { sourceFilter?: string }) {
           {syncMsg && <span className="text-xs text-slate-400">{syncMsg}</span>}
           <div className="flex items-center gap-3">
             <span className="text-sm text-slate-500">{filtered.length} leads</span>
+            <button
+              onClick={exportCsv}
+              className="btn-secondary flex items-center gap-2 text-sm px-4 py-2"
+              title="Download the filtered leads as a CSV file"
+            >
+              <Download size={14} />
+              Export
+            </button>
             <button
               onClick={runSync}
               disabled={syncing}
