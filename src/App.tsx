@@ -121,7 +121,7 @@ function DashboardApp() {
               <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center shadow-lg shadow-purple-500/20">
                 <span className="text-white font-bold text-sm">G</span>
               </div>
-              <span className="font-bold text-white text-sm hidden sm:block">GovCon Sales</span>
+              <span className="font-bold text-white text-sm hidden sm:block">Mindy Dash</span>
             </NavLink>
 
             {/* Desktop tabs */}
