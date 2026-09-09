@@ -35,11 +35,16 @@ function normalizeCalls(data: any): CallsData {
     if (call?.event_id) unique.set(call.event_id, call)
   }
   const now = Date.now()
-  const all = [...unique.values()]
+  // The cache merges three separate day buckets, so sort by start time — the day
+  // headings and the calls inside them are rendered in array order.
+  const all = [...unique.values()].sort(
+    (a, b) => new Date(a.start).getTime() - new Date(b.start).getTime()
+  )
   return {
     generated_at,
     upcoming: all.filter(call => new Date(call.end || call.start).getTime() >= now),
-    past: all.filter(call => new Date(call.end || call.start).getTime() < now),
+    // Most recent first: for past calls the useful end of the list is the newest.
+    past: all.filter(call => new Date(call.end || call.start).getTime() < now).reverse(),
   }
 }
 

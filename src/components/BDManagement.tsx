@@ -5,12 +5,21 @@ import { apiJSON, errorMessage } from '../lib/api'
 
 interface Client {
   id: string; name: string; email: string; company: string
-  client_tier: string; client_status: string; client_amount: string
+  client_tier: string; client_status: string; client_amount: number | string | null
   metadata?: {
     managed?: boolean; consultant?: string; current_status?: string
     next_step?: string; sessions_total?: number; sessions?: any[]
     deliverables?: any[]; tasks?: any[]
   }
+}
+
+// client_amount is a NUMERIC column, so it arrives as a bare number and rendered
+// straight it reads as "4997" rather than a price.
+function fmtAmt(v: number | string | null | undefined) {
+  if (v == null || v === '') return null
+  const n = Number(String(v).replace(/[^0-9.-]/g, ''))
+  if (!Number.isFinite(n)) return null
+  return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 })
 }
 
 function getProgress(client: Client): { pct: number; label: string } {
@@ -132,8 +141,8 @@ export default function BDManagement() {
                   {client.metadata?.current_status && (
                     <span className="text-xs text-slate-400 truncate max-w-[200px]">{client.metadata.current_status}</span>
                   )}
-                  {client.client_amount && (
-                    <span className="text-xs font-semibold text-emerald-400 flex-shrink-0">{client.client_amount}</span>
+                  {fmtAmt(client.client_amount) && (
+                    <span className="text-xs font-semibold text-emerald-400 flex-shrink-0">{fmtAmt(client.client_amount)}</span>
                   )}
                 </div>
               </div>

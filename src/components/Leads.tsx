@@ -23,6 +23,8 @@ interface Lead {
 type SortKey = keyof Lead
 type SortDir = 'asc' | 'desc'
 
+const NUMERIC_KEYS = new Set<SortKey>(['follow_up_count'])
+
 const STATUS_COLORS: Record<string, string> = {
   new: 'badge-blue',
   first_touch_drafted: 'badge-blue',
@@ -111,7 +113,11 @@ function LeadsList({ sourceFilter }: { sourceFilter?: string }) {
     .sort((a, b) => {
       const av = a[sortKey] ?? ''
       const bv = b[sortKey] ?? ''
-      const cmp = String(av).localeCompare(String(bv))
+      // Numeric columns (follow_up_count) must compare as numbers — as text, 10 sorts
+      // before 9. Everything else is text, and ISO dates sort correctly that way.
+      const cmp = NUMERIC_KEYS.has(sortKey)
+        ? (Number(av) || 0) - (Number(bv) || 0)
+        : String(av).localeCompare(String(bv))
       return sortDir === 'asc' ? cmp : -cmp
     })
 
@@ -154,11 +160,16 @@ function LeadsList({ sourceFilter }: { sourceFilter?: string }) {
     const rows = [cols.map(c => esc(c.label)).join(',')]
     for (const l of filtered) rows.push(cols.map(c => esc(l[c.key])).join(','))
     const blob = new Blob(['﻿' + rows.join('\n')], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
-    a.href = URL.createObjectURL(blob)
+    a.href = url
     a.download = `leads-${sourceFilter ? sourceFilter.toLowerCase() + '-' : ''}${new Date().toISOString().slice(0, 10)}.csv`
+    // The anchor has to be in the document and the object URL has to outlive the
+    // click, or the download silently does nothing outside Chrome.
+    document.body.appendChild(a)
     a.click()
-    URL.revokeObjectURL(a.href)
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 0)
   }
 
   return (

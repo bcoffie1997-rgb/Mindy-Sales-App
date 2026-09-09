@@ -77,10 +77,18 @@ async function slackDM(name: string, text: string) {
   } catch { /* DMs must never break the API */ }
 }
 
+// The team works out of US Eastern. Counting days in UTC made the server disagree
+// with the browser about what "today" is every evening, so both sides use this zone.
+const TEAM_TIMEZONE = 'America/New_York'
+function todayInTeamTz(): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone: TEAM_TIMEZONE })
+}
+
 // Automatic priority: due within 3 days → high, within 7 days → medium, otherwise none
 function autoPriority(due: string): string {
-  const today = new Date().toISOString().slice(0, 10)
-  const days = Math.round((new Date(due + 'T00:00:00Z').getTime() - new Date(today + 'T00:00:00Z').getTime()) / 86400000)
+  if (!due) return 'none'
+  const days = Math.round((new Date(due + 'T00:00:00Z').getTime() - new Date(todayInTeamTz() + 'T00:00:00Z').getTime()) / 86400000)
+  if (!Number.isFinite(days)) return 'none'
   if (days <= 3) return 'high'
   if (days <= 7) return 'medium'
   return 'none'
@@ -249,13 +257,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     if (!supabaseReady) return res.status(503).json({ error: 'Database unavailable' })
     try {
-      const today = new Date().toISOString().slice(0, 10)
-      const weekEnd = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10)
+      const today = todayInTeamTz()
+      const weekEnd = new Date(new Date(today + 'T00:00:00Z').getTime() + 7 * 86400000).toISOString().slice(0, 10)
 
-      // Daily: recalculate automatic priorities; ping when a task becomes high priority
-      const { data: open, error: openErr } = await supabase.from('tasks').select('*')
-        .neq('status', 'done').not('due_date', 'is', null)
-      if (openErr) throw openErr
+      // Daily: recalculate automatic priorities; ping when a task becomes high priority.
+      // Paginated: a plain select stops at PostgREST's 1000-row cap and would silently
+      // leave the rest of the board on a stale priority.
+      const open = await fetchAllRows('tasks', '*', (q: any) => q.neq('status', 'done').not('due_date', 'is', null))
       let bumped = 0
       for (const t of open || []) {
         const p = autoPriority(t.due_date)
@@ -272,9 +280,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Mondays: post the weekly digest
       let digestItems = null
       if (new Date().getUTCDay() === 1) {
-        const { data: due, error } = await supabase.from('tasks').select('*')
-          .neq('status', 'done').not('due_date', 'is', null).lte('due_date', weekEnd).order('due_date', { ascending: true })
-        if (error) throw error
+        const due = await fetchAllRows('tasks', '*', (q: any) =>
+          q.neq('status', 'done').not('due_date', 'is', null).lte('due_date', weekEnd).order('due_date', { ascending: true }))
         const lines = (due || []).map((t: any) => {
           const overdue = t.due_date < today ? '⚠️ ' : ''
           const who = t.assignee ? ` (${t.assignee})` : ''
@@ -311,9 +318,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     // GET /api/stats
     if (path === 'stats') {
-      const [all, { data: events }] = await Promise.all([
+      const [all, events] = await Promise.all([
         fetchAllRows('leads', '*'),
-        supabase.from('agent_events').select('agent_name,event_type,ts').eq('event_type','run_summary').order('ts',{ascending:true})
+        // Paginated: capped at 1000 rows this returned the *oldest* runs, so agent
+        // health froze on ancient timestamps once the event log grew past the cap.
+        fetchAllRows('agent_events', 'agent_name,event_type,ts', (q:any) => q.eq('event_type','run_summary').order('ts',{ascending:true}))
       ])
       const normalized = (all||[]).map(normalizeLead)
       const leads = normalized.filter((l:any) => l.type !== 'client')
@@ -1049,17 +1058,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // ── Task manager ──
     // GET /api/tasks?assignee=<name>
     if (path === 'tasks' && method === 'GET') {
-      let q = supabase.from('tasks').select('*').order('sort_order', { ascending: true }).order('created_at', { ascending: true })
       const assignee = typeof req.query.assignee === 'string' ? req.query.assignee : ''
-      if (assignee) q = q.eq('assignee', assignee)
-      const { data, error } = await q
-      if (error) {
-        if (error.code === '42P01' || error.code === 'PGRST205' || /does not exist|schema cache/i.test(error.message || '')) {
+      let data: any[]
+      try {
+        data = await fetchAllRows('tasks', '*', (q: any) => {
+          const ordered = q.order('sort_order', { ascending: true }).order('created_at', { ascending: true })
+          return assignee ? ordered.eq('assignee', assignee) : ordered
+        })
+      } catch (error: any) {
+        if (error?.code === '42P01' || error?.code === 'PGRST205' || /does not exist|schema cache/i.test(error?.message || '')) {
           return res.status(503).json({ error: 'Task tables not set up yet', setupRequired: true })
         }
         throw error
       }
-      return res.json((data || []).map((t: any) => ({ ...t, priority: taskPriority(t) })))
+      return res.json(data.map((t: any) => ({ ...t, priority: taskPriority(t) })))
     }
     // POST /api/tasks
     if (path === 'tasks' && method === 'POST') {
@@ -1109,9 +1121,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (error.code === 'PGRST116') return res.status(404).json({ error: 'Task not found' })
         throw error
       }
-      // Due date set/changed/cleared → priority follows the automatic rules
-      if (updates.due_date !== undefined && data.status !== 'done') {
-        const p = autoPriority(data.due_date || '')
+      // A due date that is set or changed drives the priority automatically. Clearing
+      // the due date hands control back: keep the priority the request asked for
+      // (or the stored one) instead of silently flattening it to 'none'.
+      if (updates.due_date && data.status !== 'done') {
+        const p = autoPriority(updates.due_date)
         if (p !== data.priority) {
           await supabase.from('tasks').update({ priority: p }).eq('id', id)
           data.priority = p

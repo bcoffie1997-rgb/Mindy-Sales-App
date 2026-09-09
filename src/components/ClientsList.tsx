@@ -5,7 +5,7 @@ import { apiJSON, errorMessage } from '../lib/api'
 
 interface Client {
   id: string; name: string; email: string; phone: string; company: string
-  client_tier: string; client_product: string; client_amount: string
+  client_tier: string; client_product: string; client_amount: number | string | null
   client_start_date: string; client_status: string
   metadata?: { plan?: string; consultant?: string; managed?: boolean }
   calendly?: { total_calls: number }
@@ -44,6 +44,15 @@ function planLabel(client: Client) {
 function fmtDate(iso: string) {
   if (!iso) return '—'
   return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+// client_amount is a NUMERIC column, so it arrives as a bare number and rendered
+// straight it reads as "4997" rather than a price.
+function fmtAmt(v: number | string | null | undefined) {
+  if (v == null || v === '') return null
+  const n = Number(String(v).replace(/[^0-9.-]/g, ''))
+  if (!Number.isFinite(n)) return null
+  return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 })
 }
 
 export default function ClientsList() {
@@ -185,7 +194,7 @@ export default function ClientsList() {
                 </div>
               </div>
               <div className="flex items-center gap-3 text-xs text-slate-400 flex-wrap">
-                {client.client_amount && <span className="font-semibold text-emerald-400">{client.client_amount}</span>}
+                {fmtAmt(client.client_amount) && <span className="font-semibold text-emerald-400">{fmtAmt(client.client_amount)}</span>}
                 {client.client_start_date && <span className="text-slate-500">Since {fmtDate(client.client_start_date)}</span>}
                 <span className="text-slate-500">{planLabel(client)}</span>
               </div>
@@ -236,7 +245,7 @@ export default function ClientsList() {
                   </td>
                   <td className="px-4 py-3 text-xs text-slate-400 max-w-[160px] truncate">{planLabel(client)}</td>
                   <td className="px-4 py-3 text-xs text-slate-400">{client.metadata?.consultant || '—'}</td>
-                  <td className="px-4 py-3 text-sm font-semibold text-emerald-400">{client.client_amount || '—'}</td>
+                  <td className="px-4 py-3 text-sm font-semibold text-emerald-400">{fmtAmt(client.client_amount) || '—'}</td>
                   <td className="px-4 py-3">
                     <span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_COLORS[client.client_status] || 'bg-white/10 text-slate-400'}`}>
                       {client.client_status || 'active'}

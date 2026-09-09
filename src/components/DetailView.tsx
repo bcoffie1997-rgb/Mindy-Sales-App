@@ -86,11 +86,18 @@ export default function DetailView({ mode = 'client' }: { mode?: 'client' | 'lea
 
   useEffect(() => { load() }, [id])
 
+  // Keep the newest save in a ref so unmount can flush it. Without this, navigating
+  // away inside the 900ms debounce cancelled the timer and dropped the edit silently.
+  const pendingSaveRef = useRef<(() => Promise<void>) | null>(null)
+
   useEffect(() => {
     if (!dirty || loading || !data?.client) return
-    const t = setTimeout(() => save(), 900)
+    pendingSaveRef.current = save
+    const t = setTimeout(() => { pendingSaveRef.current = null; save() }, 900)
     return () => clearTimeout(t)
   }, [dirty, tier, consultant, currentStatus, nextStep, notes, tasks, managed, sessionsTotal, sessions, deliverables])
+
+  useEffect(() => () => { void pendingSaveRef.current?.() }, [])
 
   async function save() {
     if (!data?.client) return
@@ -214,7 +221,9 @@ export default function DetailView({ mode = 'client' }: { mode?: 'client' | 'lea
               <option key={k} value={k} className="bg-slate-900 text-slate-200">{v.label}</option>
             ))}
           </select>
-          {client.client_amount && <span className="text-lg font-bold text-emerald-400">{client.client_amount}</span>}
+          {Number.isFinite(Number(client.client_amount)) && client.client_amount !== null && client.client_amount !== '' && (
+            <span className="text-lg font-bold text-emerald-400">{fmtAmt(Number(client.client_amount))}</span>
+          )}
           {client.client_start_date && <span className="text-xs text-slate-500">Since {fmtDate(client.client_start_date)}</span>}
         </div>
       </div>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { DollarSign, TrendingUp, TrendingDown, CreditCard, RefreshCw, ArrowUpRight, Users, FileText, Search, ChevronDown, ChevronUp, AlertCircle, RotateCcw } from 'lucide-react'
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { apiJSON, errorMessage } from '../lib/api'
@@ -138,18 +138,36 @@ export default function Revenue() {
     }
   }
 
-  const searchTransactions = (q: string) => {
-    setTxSearch(q)
+  // Every keystroke used to fire its own request to Stripe, and whichever response
+  // landed last won — so results could belong to a query the user had moved past.
+  // Debounce the input, and ignore any response that is no longer the newest request.
+  const txRequestRef = useRef(0)
+
+  useEffect(() => {
+    const q = txSearch.trim()
+    if (!q) {
+      txRequestRef.current++
+      setTxResults(null)
+      setTxTotal(0)
+      setTxLoading(false)
+      return
+    }
     setTxLoading(true)
-    apiJSON<any>(`/api/transactions?q=${encodeURIComponent(q)}`).then(data => {
-      setTxResults(data.results || [])
-      setTxTotal(data.total || 0)
-      setTxLoading(false)
-    }).catch(err => {
-      setActionError(errorMessage(err))
-      setTxLoading(false)
-    })
-  }
+    const timer = setTimeout(() => {
+      const requestId = ++txRequestRef.current
+      apiJSON<any>(`/api/transactions?q=${encodeURIComponent(q)}`).then(data => {
+        if (requestId !== txRequestRef.current) return
+        setTxResults(data.results || [])
+        setTxTotal(data.total || 0)
+        setTxLoading(false)
+      }).catch(err => {
+        if (requestId !== txRequestRef.current) return
+        setActionError(errorMessage(err))
+        setTxLoading(false)
+      })
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [txSearch])
 
   const loadCrossRef = () => {
     setShowCrossRef(true)
@@ -212,8 +230,10 @@ export default function Revenue() {
   const mom = revenue.monthOverMonth ? parseFloat(revenue.monthOverMonth) : null
   const momPositive = mom !== null && mom >= 0
 
-  // Chart data
+  // Chart data. dailyRevenue arrives keyed by date in Stripe's newest-first order, so
+  // sort by the raw key before formatting or the bars run backwards in time.
   const dailyChartData = Object.entries(revenue.dailyRevenue || {})
+    .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, amount]) => ({ date: new Date(date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }), amount }))
 
   const monthlyChartData = (revenue.monthlyRevenue || []).map(m => ({
@@ -393,8 +413,13 @@ export default function Revenue() {
             placeholder="Search by name, email, or description..."
             className="input-dark w-full"
             value={txSearch}
-            onChange={e => searchTransactions(e.target.value)}
+            onChange={e => setTxSearch(e.target.value)}
           />
+          {txSearch.trim() && (
+            <p className="text-xs text-slate-500 mt-1.5">
+              {txLoading ? 'Searching…' : `${txResults?.length ?? 0} of ${txTotal} transactions match`}
+            </p>
+          )}
         </div>
         <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
           <table className="w-full text-sm">
