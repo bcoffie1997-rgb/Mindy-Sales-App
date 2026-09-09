@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Plus, Trash2, UserPlus, X, ChevronLeft, ChevronRight, CalendarDays, Pencil, Check, Bell, Flag, LayoutGrid, List, Calendar, FileText, ExternalLink } from 'lucide-react'
+import { Plus, Trash2, UserPlus, X, ChevronLeft, ChevronRight, CalendarDays, Pencil, Check, Bell, Flag, LayoutGrid, List, Calendar, FileText, ExternalLink, Megaphone, Pin } from 'lucide-react'
 import { apiJSON, errorMessage } from '../lib/api'
 
 interface Task {
@@ -334,25 +334,13 @@ export default function Tasks() {
         /* Team view: Priority Items / Reminders / Team Documents tabs */
         <div className="space-y-4">
           <div className="flex items-center gap-1 border-b border-white/10">
-            <SubTab label="Priority Items" active={teamSection === 'priority'} onClick={() => setTeamSection('priority')} />
+            <SubTab label="Bulletin Board" active={teamSection === 'priority'} onClick={() => setTeamSection('priority')} />
             <SubTab label="Reminders" active={teamSection === 'reminders'} onClick={() => setTeamSection('reminders')} />
             <SubTab label="Team Documents" active={teamSection === 'documents'} onClick={() => setTeamSection('documents')} />
           </div>
 
           {teamSection === 'priority' && (
-            <div className="rounded-2xl bg-white/[0.03] border border-white/10 p-4">
-              <div className="flex items-center gap-2 pb-3">
-                <Flag size={16} className="text-purple-400" />
-                <h2 className="text-sm font-semibold text-slate-200">Priority Items</h2>
-                <span className="text-xs text-slate-500">{priorityList.length}</span>
-              </div>
-              <div className="space-y-2">
-                {priorityList.map(task => (
-                  <TeamRow key={task.id} task={task} showPriority={false} permanent onComplete={completeTask} onEdit={openEdit} onDelete={deleteTask} />
-                ))}
-                {priorityList.length === 0 && <p className="text-xs text-slate-600 px-1 py-2">No open tasks</p>}
-              </div>
-            </div>
+            <BulletinBoard items={priorityList} onEdit={openEdit} onPin={() => setForm({ ...emptyForm })} />
           )}
 
           {teamSection === 'reminders' && (
@@ -574,6 +562,97 @@ function TeamRow({ task, showDue, showPriority = true, permanent = false, onComp
           </button>
         )}
       </div>
+    </div>
+  )
+}
+
+// The team board reads as a bulletin board rather than a checklist: these are the
+// things everyone should know about right now, not items anyone ticks off.
+const PIN_ACCENTS = [
+  { bar: 'bg-purple-500', pin: 'text-purple-400', glow: 'hover:border-purple-500/40' },
+  { bar: 'bg-amber-500', pin: 'text-amber-400', glow: 'hover:border-amber-500/40' },
+  { bar: 'bg-emerald-500', pin: 'text-emerald-400', glow: 'hover:border-emerald-500/40' },
+  { bar: 'bg-blue-500', pin: 'text-blue-400', glow: 'hover:border-blue-500/40' },
+]
+
+function BulletinBoard({ items, onEdit, onPin }: {
+  items: Task[]
+  onEdit: (t: Task) => void
+  onPin: () => void
+}) {
+  return (
+    <div className="rounded-2xl bg-white/[0.03] border border-white/10 p-4 sm:p-5 space-y-4">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-2.5">
+          <div className="w-9 h-9 rounded-xl bg-purple-500/15 border border-purple-500/25 flex items-center justify-center">
+            <Megaphone size={17} className="text-purple-300" />
+          </div>
+          <div>
+            <h2 className="text-base font-semibold text-white">What&rsquo;s happening now</h2>
+            <p className="text-xs text-slate-500">
+              {items.length === 0
+                ? 'Nothing pinned yet'
+                : `${items.length} item${items.length === 1 ? '' : 's'} the whole team should know about`}
+            </p>
+          </div>
+        </div>
+        <button
+          onClick={onPin}
+          className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-300 hover:text-white border border-white/10 hover:border-white/20 transition-colors"
+        >
+          <Pin size={14} /> Pin an item
+        </button>
+      </div>
+
+      {items.length === 0 ? (
+        <button
+          onClick={onPin}
+          className="w-full rounded-2xl border border-dashed border-white/15 hover:border-purple-500/40 px-6 py-10 text-center transition-colors group"
+        >
+          <Pin size={22} className="mx-auto text-slate-600 group-hover:text-purple-400 transition-colors" />
+          <p className="text-sm text-slate-400 mt-2">Pin the first item to the board</p>
+          <p className="text-xs text-slate-600 mt-1">Speaking engagements, launches, anything the team should have front of mind</p>
+        </button>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 items-start">
+          {items.map((task, i) => {
+            const accent = PIN_ACCENTS[i % PIN_ACCENTS.length]
+            const due = dueState(task.due_date, task.status)
+            return (
+              <button
+                key={task.id}
+                onClick={() => onEdit(task)}
+                title="Click to edit"
+                className={`group relative text-left overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-b from-white/[0.07] to-white/[0.02] p-4 pt-5 transition-colors ${accent.glow}`}
+              >
+                <span className={`absolute inset-x-0 top-0 h-1 ${accent.bar}`} />
+                <Pin size={13} className={`absolute top-3.5 right-3.5 ${accent.pin}`} />
+                <p className="text-sm font-semibold text-white leading-snug pr-6">{task.title}</p>
+                {task.description && (
+                  <p className="text-xs text-slate-400 mt-2 leading-relaxed whitespace-pre-wrap line-clamp-4">{task.description}</p>
+                )}
+                {(task.due_date || task.assignee) && (
+                  <div className="flex items-center gap-2 flex-wrap mt-3 pt-3 border-t border-white/5">
+                    {task.assignee && (
+                      <span className="text-[10px] font-medium px-2 py-0.5 rounded-full border border-purple-500/30 bg-purple-500/15 text-purple-300">
+                        {task.assignee}
+                      </span>
+                    )}
+                    {task.due_date && (
+                      <span className={`flex items-center gap-1 text-[10px] font-medium ${
+                        due === 'overdue' ? 'text-red-400' : due === 'today' ? 'text-amber-400' : 'text-slate-400'
+                      }`}>
+                        <CalendarDays size={11} />
+                        {due === 'overdue' ? 'Overdue · ' : due === 'today' ? 'Today · ' : ''}{fmtDate(task.due_date)}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
