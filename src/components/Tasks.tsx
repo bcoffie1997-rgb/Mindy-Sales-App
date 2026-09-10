@@ -124,6 +124,17 @@ export default function Tasks() {
       .sort((a, b) => (a.due_date || '').localeCompare(b.due_date || '')),
     [tasks])
 
+  // Merge priority items + reminders into one interleaved bulletin board
+  const boardItems = useMemo(() => {
+    const items: { task: Task; kind: 'priority' | 'reminder' }[] = []
+    const maxLen = Math.max(priorityList.length, reminderList.length)
+    for (let i = 0; i < maxLen; i++) {
+      if (priorityList[i]) items.push({ task: priorityList[i], kind: 'priority' })
+      if (reminderList[i]) items.push({ task: reminderList[i], kind: 'reminder' })
+    }
+    return items
+  }, [priorityList, reminderList])
+
   async function patchTask(id: number, fields: Record<string, unknown>) {
     await apiJSON('/api/tasks', {
       method: 'PATCH',
@@ -321,37 +332,50 @@ export default function Tasks() {
       ) : view === 'calendar' ? (
         <CalendarView tasks={viewTasks} onEdit={openEdit} onAddForDate={date => setForm({ ...emptyForm, due_date: date, assignee: activeTab === 'team' ? '' : activeTab })} />
       ) : activeTab === 'team' ? (
-        /* Team view: priority list + reminders */
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {/* Priority list */}
-          <div className="rounded-2xl bg-white/[0.03] border border-white/10 p-4">
-            <div className="flex items-center gap-2 pb-3">
-              <Flag size={16} className="text-purple-400" />
-              <h2 className="text-sm font-semibold text-slate-200">Priority List</h2>
-              <span className="text-xs text-slate-500">{priorityList.length}</span>
-            </div>
-            <div className="space-y-2">
-              {priorityList.map(task => (
-                <TeamRow key={task.id} task={task} onComplete={completeTask} onEdit={openEdit} onDelete={deleteTask} />
-              ))}
-              {priorityList.length === 0 && <p className="text-xs text-slate-600 px-1 py-2">No open tasks</p>}
+        /* Team view: a single bulletin board mixing priority items + reminders as pinned notes */
+        <div
+          className="relative rounded-3xl border border-white/10 p-4 sm:p-6 md:p-8"
+          style={{
+            backgroundColor: '#0a0f1f',
+            backgroundImage: 'radial-gradient(rgba(255,255,255,0.05) 1px, transparent 1.3px)',
+            backgroundSize: '22px 22px',
+            boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.04), inset 0 0 70px rgba(0,0,0,0.55)',
+          }}
+        >
+          {/* Board header + legend */}
+          <div className="flex items-center justify-between flex-wrap gap-3 mb-5">
+            <h2 className="text-base font-semibold tracking-tight text-white">Team Board</h2>
+            <div className="flex items-center gap-2 text-[11px]">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-purple-400/30 bg-purple-500/15 px-2.5 py-1 font-medium text-purple-200">
+                <Flag size={12} /> Priority <span className="text-purple-300/70">{priorityList.length}</span>
+              </span>
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-400/30 bg-amber-500/15 px-2.5 py-1 font-medium text-amber-200">
+                <Bell size={12} /> Reminders <span className="text-amber-300/70">{reminderList.length}</span>
+              </span>
             </div>
           </div>
 
-          {/* Reminders */}
-          <div className="rounded-2xl bg-white/[0.03] border border-white/10 p-4">
-            <div className="flex items-center gap-2 pb-3">
-              <Bell size={16} className="text-amber-400" />
-              <h2 className="text-sm font-semibold text-slate-200">Reminders</h2>
-              <span className="text-xs text-slate-500">{reminderList.length}</span>
+          {boardItems.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
+              <Flag size={22} className="text-slate-600" />
+              <p className="text-sm text-slate-400">The board is empty</p>
+              <p className="text-xs text-slate-600">Add a task to pin it here — check "Reminder" when creating one to post it as a reminder.</p>
             </div>
-            <div className="space-y-2">
-              {reminderList.map(task => (
-                <TeamRow key={task.id} task={task} showDue onComplete={completeTask} onEdit={openEdit} onDelete={deleteTask} />
+          ) : (
+            <div className="columns-1 sm:columns-2 xl:columns-3 gap-4 [column-fill:_balance]">
+              {boardItems.map((item, i) => (
+                <BoardNote
+                  key={item.task.id}
+                  task={item.task}
+                  kind={item.kind}
+                  index={i}
+                  onComplete={completeTask}
+                  onEdit={openEdit}
+                  onDelete={deleteTask}
+                />
               ))}
-              {reminderList.length === 0 && <p className="text-xs text-slate-600 px-1 py-2">No reminders — check "Reminder" when creating a task</p>}
             </div>
-          </div>
+          )}
         </div>
       ) : (
         /* Member view: kanban board */
@@ -533,6 +557,100 @@ function TeamRow({ task, showDue, onComplete, onEdit, onDelete }: {
         <button onClick={() => onDelete(task)} className="text-slate-500 hover:text-red-400 transition-colors" title="Delete">
           <Trash2 size={14} />
         </button>
+      </div>
+    </div>
+  )
+}
+
+// Varied "paper" tints for the bulletin board — cool hues for priority, warm for reminders
+const NOTE_TINTS: Record<'priority' | 'reminder', { surface: string; pin: string }[]> = {
+  priority: [
+    { surface: 'bg-indigo-500/10 border-indigo-400/25', pin: 'bg-indigo-400' },
+    { surface: 'bg-purple-500/10 border-purple-400/25', pin: 'bg-purple-400' },
+    { surface: 'bg-sky-500/10 border-sky-400/25', pin: 'bg-sky-400' },
+    { surface: 'bg-violet-500/10 border-violet-400/25', pin: 'bg-violet-400' },
+  ],
+  reminder: [
+    { surface: 'bg-amber-500/10 border-amber-400/25', pin: 'bg-amber-400' },
+    { surface: 'bg-orange-500/10 border-orange-400/25', pin: 'bg-orange-400' },
+    { surface: 'bg-rose-500/10 border-rose-400/25', pin: 'bg-rose-400' },
+  ],
+}
+
+const NOTE_ROTATIONS = [-1.6, 1.2, -0.8, 1.8, -1.2]
+
+function BoardNote({ task, kind, index, onComplete, onEdit, onDelete }: {
+  task: Task
+  kind: 'priority' | 'reminder'
+  index: number
+  onComplete: (t: Task) => void
+  onEdit: (t: Task) => void
+  onDelete: (t: Task) => void
+}) {
+  const due = dueState(task.due_date, task.status)
+  const palette = NOTE_TINTS[kind]
+  const tint = palette[index % palette.length]
+  const rotation = NOTE_ROTATIONS[index % NOTE_ROTATIONS.length]
+  return (
+    <div className="mb-4 break-inside-avoid">
+      <div
+        style={{ transform: `rotate(${rotation}deg)` }}
+        className={`group relative rounded-xl border ${tint.surface} p-4 pt-5 shadow-lg shadow-black/30 backdrop-blur-sm transition-transform duration-200 hover:rotate-0 hover:-translate-y-0.5 motion-reduce:transition-none motion-reduce:hover:transform-none`}
+      >
+        {/* Pin */}
+        <span className="pointer-events-none absolute -top-2 left-1/2 -translate-x-1/2">
+          <span
+            className={`block h-3.5 w-3.5 rounded-full ${tint.pin} ring-2 ring-black/30`}
+            style={{ boxShadow: 'inset -1px -1px 2px rgba(0,0,0,0.35), 0 2px 3px rgba(0,0,0,0.45)' }}
+          />
+        </span>
+
+        {/* Type tag + actions */}
+        <div className="flex items-start justify-between gap-2">
+          {kind === 'priority' ? (
+            <span className="inline-flex items-center gap-1 rounded-full border border-purple-400/30 bg-purple-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-purple-200">
+              <Flag size={10} /> Priority
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
+              <Bell size={10} /> Reminder
+            </span>
+          )}
+          <div className="flex items-center gap-1 shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
+            <button onClick={() => onComplete(task)} title="Mark done" className="text-slate-400 hover:text-emerald-400 transition-colors">
+              <Check size={14} />
+            </button>
+            <button onClick={() => onEdit(task)} title="Edit" className="text-slate-400 hover:text-white transition-colors">
+              <Pencil size={13} />
+            </button>
+            <button onClick={() => onDelete(task)} title="Delete" className="text-slate-400 hover:text-red-400 transition-colors">
+              <Trash2 size={13} />
+            </button>
+          </div>
+        </div>
+
+        {/* Body — click to view / edit details */}
+        <button onClick={() => onEdit(task)} title="Click to view details" className="mt-2.5 block w-full text-left">
+          <p className="text-sm font-semibold leading-snug text-white">{task.title}</p>
+          {task.description && (
+            <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-slate-300/80 line-clamp-4">{task.description}</p>
+          )}
+        </button>
+
+        {/* Meta */}
+        <div className="mt-3 flex items-center gap-2 flex-wrap">
+          <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${PRIORITY_STYLES[task.priority]}`}>
+            {task.priority}
+          </span>
+          {task.due_date && (
+            <span className={`inline-flex items-center gap-1 text-[10px] font-medium ${
+              due === 'overdue' ? 'text-red-400' : due === 'today' ? 'text-amber-400' : 'text-slate-400'
+            }`}>
+              <CalendarDays size={11} />
+              {due === 'overdue' ? 'Overdue · ' : due === 'today' ? 'Today · ' : ''}{fmtDate(task.due_date)}
+            </span>
+          )}
+        </div>
       </div>
     </div>
   )
