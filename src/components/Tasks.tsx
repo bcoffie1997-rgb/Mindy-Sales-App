@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Plus, Trash2, UserPlus, X, ChevronLeft, ChevronRight, CalendarDays, Pencil, Check, Bell, Flag, LayoutGrid, List, Calendar, FileText, ExternalLink } from 'lucide-react'
+import { useEffect, useMemo, useState, type ComponentType, type DragEvent, type ReactNode } from 'react'
+import { Plus, Trash2, UserPlus, X, ChevronLeft, ChevronRight, CalendarDays, Pencil, Check, Bell, Flag, LayoutGrid, List, Calendar, FileText, ExternalLink, Pin, GripVertical } from 'lucide-react'
 import { apiJSON, errorMessage } from '../lib/api'
 
 interface Task {
@@ -10,6 +10,7 @@ interface Task {
   priority: 'none' | 'low' | 'medium' | 'high'
   assignee: string | null
   due_date: string | null
+  sort_order: number
   created_at: string
   completed_at: string | null
 }
@@ -72,7 +73,8 @@ export default function Tasks() {
   const [personName, setPersonName] = useState('')
   const [saving, setSaving] = useState(false)
   const [view, setView] = useState<'board' | 'list' | 'calendar'>('board')
-  const [teamSection, setTeamSection] = useState<'priority' | 'reminders' | 'documents'>('priority')
+  const [draggedTaskId, setDraggedTaskId] = useState<number | null>(null)
+  const [dragTargetStatus, setDragTargetStatus] = useState<Task['status'] | null>(null)
 
   async function load() {
     try {
@@ -104,8 +106,7 @@ export default function Tasks() {
     const order: Record<Task['status'], number> = { todo: 0, in_progress: 1, done: 2, reminder: 3 }
     return [...filtered].sort((a, b) =>
       order[a.status] - order[b.status] ||
-      (a.due_date || '9999').localeCompare(b.due_date || '9999') ||
-      PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority] ||
+      (a.sort_order ?? 0) - (b.sort_order ?? 0) ||
       a.created_at.localeCompare(b.created_at)
     )
   }, [tasks, activeTab])
@@ -182,6 +183,58 @@ export default function Tasks() {
       await load()
       setError(msg)
     }
+  }
+
+  function taskColumn(task: Task): Task['status'] {
+    return task.status === 'reminder' ? 'todo' : task.status
+  }
+
+  async function dropTask(targetStatus: Task['status'], beforeTaskId?: number) {
+    if (draggedTaskId === null || activeTab === 'team') return
+    const dragged = tasks.find(t => t.id === draggedTaskId)
+    if (!dragged) return
+
+    const sourceStatus = taskColumn(dragged)
+    const personalTasks = visibleTasks.filter(t => t.id !== dragged.id)
+    const sourceTasks = personalTasks.filter(t => taskColumn(t) === sourceStatus)
+    const targetTasks = sourceStatus === targetStatus
+      ? sourceTasks
+      : personalTasks.filter(t => taskColumn(t) === targetStatus)
+    const insertAt = beforeTaskId === undefined
+      ? targetTasks.length
+      : Math.max(0, targetTasks.findIndex(t => t.id === beforeTaskId))
+    targetTasks.splice(insertAt, 0, { ...dragged, status: targetStatus })
+
+    const changes = new Map<number, { sort_order: number; status?: Task['status'] }>()
+    if (sourceStatus !== targetStatus) {
+      sourceTasks.forEach((task, index) => changes.set(task.id, { sort_order: index * 1000 }))
+    }
+    targetTasks.forEach((task, index) => {
+      const change: { sort_order: number; status?: Task['status'] } = { sort_order: index * 1000 }
+      if (task.id === dragged.id && dragged.status !== targetStatus) change.status = targetStatus
+      changes.set(task.id, change)
+    })
+
+    setTasks(prev => prev.map(task => {
+      const change = changes.get(task.id)
+      return change ? { ...task, ...change } : task
+    }))
+    setDraggedTaskId(null)
+    setDragTargetStatus(null)
+
+    try {
+      await Promise.all([...changes].map(([id, change]) => patchTask(id, change)))
+    } catch (err) {
+      const msg = errorMessage(err)
+      await load()
+      setError(msg)
+    }
+  }
+
+  function startDrag(event: DragEvent<HTMLDivElement>, task: Task) {
+    setDraggedTaskId(task.id)
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', String(task.id))
   }
 
   async function completeTask(task: Task) {
@@ -331,47 +384,46 @@ export default function Tasks() {
       ) : view === 'calendar' ? (
         <CalendarView tasks={viewTasks} onEdit={openEdit} onAddForDate={date => setForm({ ...emptyForm, due_date: date, assignee: activeTab === 'team' ? '' : activeTab })} />
       ) : activeTab === 'team' ? (
-        /* Team view: Priority Items / Reminders / Team Documents tabs */
-        <div className="space-y-4">
-          <div className="flex items-center gap-1 border-b border-white/10">
-            <SubTab label="Priority Items" active={teamSection === 'priority'} onClick={() => setTeamSection('priority')} />
-            <SubTab label="Reminders" active={teamSection === 'reminders'} onClick={() => setTeamSection('reminders')} />
-            <SubTab label="Team Documents" active={teamSection === 'documents'} onClick={() => setTeamSection('documents')} />
+        /* Team bulletin board: priorities, reminders & documents pinned in one view */
+        <div className="rounded-3xl border border-white/10 bg-gradient-to-br from-purple-500/[0.06] via-white/[0.02] to-amber-500/[0.05] p-4 sm:p-6 space-y-5">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-purple-500/20 border border-purple-500/30 flex items-center justify-center">
+              <Pin size={16} className="text-purple-300" />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-white">Team Bulletin</h2>
+              <p className="text-xs text-slate-500">Priorities, reminders & documents — pinned for everyone</p>
+            </div>
           </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <BoardColumn
+              title="Priority Items"
+              icon={Flag}
+              iconClass="text-purple-400"
+              count={priorityList.length}
+              onAdd={() => setForm({ ...emptyForm })}
+            >
+              {priorityList.map((task, i) => (
+                <StickyNote key={task.id} task={task} color="purple" tilt={i} onEdit={openEdit} />
+              ))}
+              {priorityList.length === 0 && <p className="text-xs text-slate-600 px-1 py-2">No open items — pin one with +</p>}
+            </BoardColumn>
 
-          {teamSection === 'priority' && (
-            <div className="rounded-2xl bg-white/[0.03] border border-white/10 p-4">
-              <div className="flex items-center gap-2 pb-3">
-                <Flag size={16} className="text-purple-400" />
-                <h2 className="text-sm font-semibold text-slate-200">Priority Items</h2>
-                <span className="text-xs text-slate-500">{priorityList.length}</span>
-              </div>
-              <div className="space-y-2">
-                {priorityList.map(task => (
-                  <TeamRow key={task.id} task={task} showPriority={false} permanent onComplete={completeTask} onEdit={openEdit} onDelete={deleteTask} />
-                ))}
-                {priorityList.length === 0 && <p className="text-xs text-slate-600 px-1 py-2">No open tasks</p>}
-              </div>
-            </div>
-          )}
+            <BoardColumn
+              title="Reminders"
+              icon={Bell}
+              iconClass="text-amber-400"
+              count={reminderList.length}
+              onAdd={() => setForm({ ...emptyForm, asReminder: true })}
+            >
+              {reminderList.map((task, i) => (
+                <StickyNote key={task.id} task={task} color="amber" tilt={i} onEdit={openEdit} />
+              ))}
+              {reminderList.length === 0 && <p className="text-xs text-slate-600 px-1 py-2">No reminders — pin one with +</p>}
+            </BoardColumn>
 
-          {teamSection === 'reminders' && (
-            <div className="rounded-2xl bg-white/[0.03] border border-white/10 p-4">
-              <div className="flex items-center gap-2 pb-3">
-                <Bell size={16} className="text-amber-400" />
-                <h2 className="text-sm font-semibold text-slate-200">Reminders</h2>
-                <span className="text-xs text-slate-500">{reminderList.length}</span>
-              </div>
-              <div className="space-y-2">
-                {reminderList.map(task => (
-                  <TeamRow key={task.id} task={task} showDue showPriority={false} permanent onComplete={completeTask} onEdit={openEdit} onDelete={deleteTask} />
-                ))}
-                {reminderList.length === 0 && <p className="text-xs text-slate-600 px-1 py-2">No reminders — check "Reminder" when creating a task</p>}
-              </div>
-            </div>
-          )}
-
-          {teamSection === 'documents' && <TeamDocuments />}
+            <TeamDocuments variant="board" />
+          </div>
         </div>
       ) : (
         /* Member view: kanban board */
@@ -379,22 +431,63 @@ export default function Tasks() {
           {COLUMNS.map(col => {
             const colTasks = visibleTasks.filter(t => t.status === col.key || (col.key === 'todo' && t.status === 'reminder'))
             return (
-              <div key={col.key} className="rounded-2xl bg-white/[0.03] border border-white/10 p-3 min-h-[120px]">
+              <div
+                key={col.key}
+                onDragOver={event => {
+                  event.preventDefault()
+                  event.dataTransfer.dropEffect = 'move'
+                  setDragTargetStatus(col.key)
+                }}
+                onDragLeave={event => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragTargetStatus(null)
+                }}
+                onDrop={event => {
+                  event.preventDefault()
+                  dropTask(col.key)
+                }}
+                className={`rounded-2xl bg-white/[0.03] border p-3 min-h-[120px] transition-colors ${
+                  dragTargetStatus === col.key ? 'border-purple-500/60 bg-purple-500/[0.08]' : 'border-white/10'
+                }`}
+              >
                 <div className="flex items-center justify-between px-1 pb-3">
                   <h2 className="text-sm font-semibold text-slate-300">{col.label}</h2>
                   <span className="text-xs text-slate-500">{colTasks.length}</span>
                 </div>
                 <div className="space-y-2">
                   {colTasks.map(task => (
-                    <div key={task.id} className="card p-3.5 space-y-2">
+                    <div
+                      key={task.id}
+                      draggable
+                      onDragStart={event => startDrag(event, task)}
+                      onDragEnd={() => {
+                        setDraggedTaskId(null)
+                        setDragTargetStatus(null)
+                      }}
+                      onDragOver={event => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        setDragTargetStatus(col.key)
+                      }}
+                      onDrop={event => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        dropTask(col.key, task.id)
+                      }}
+                      className={`card p-3.5 space-y-2 cursor-grab active:cursor-grabbing transition-opacity ${
+                        draggedTaskId === task.id ? 'opacity-40' : ''
+                      }`}
+                    >
                       <div className="flex items-start justify-between gap-2">
-                        <p
-                          onClick={() => openEdit(task)}
-                          title="Click to view details"
-                          className={`cursor-pointer text-sm font-medium ${task.status === 'done' ? 'text-slate-500 line-through' : 'text-white'}`}
-                        >
-                          {task.title}
-                        </p>
+                        <div className="flex items-start gap-2 min-w-0">
+                          <GripVertical size={15} className="mt-0.5 shrink-0 text-slate-600" aria-hidden="true" />
+                          <p
+                            onClick={() => openEdit(task)}
+                            title="Click to view details"
+                            className={`cursor-pointer text-sm font-medium ${task.status === 'done' ? 'text-slate-500 line-through' : 'text-white'}`}
+                          >
+                            {task.title}
+                          </p>
+                        </div>
                         <div className="flex items-center gap-1 shrink-0">
                           <button onClick={() => openEdit(task)} className="text-slate-500 hover:text-white transition-colors" title="Edit">
                             <Pencil size={14} />
@@ -736,6 +829,59 @@ interface TeamDocument {
   created_at: string
 }
 
+function BoardColumn({ title, icon: Icon, iconClass, count, onAdd, children }: {
+  title: string
+  icon: ComponentType<{ size?: string | number; className?: string }>
+  iconClass: string
+  count: number
+  onAdd: () => void
+  children: ReactNode
+}) {
+  return (
+    <div className="rounded-2xl bg-white/[0.03] border border-white/10 p-3 min-h-[160px]">
+      <div className="flex items-center justify-between px-1 pb-3">
+        <div className="flex items-center gap-2">
+          <Icon size={15} className={iconClass} />
+          <h3 className="text-sm font-semibold text-slate-200">{title}</h3>
+          <span className="text-xs text-slate-500">{count}</span>
+        </div>
+        <button onClick={onAdd} className="text-slate-500 hover:text-white transition-colors" title={`Pin a new ${title.toLowerCase().replace(/s$/, '')}`}>
+          <Plus size={15} />
+        </button>
+      </div>
+      <div className="space-y-2.5">{children}</div>
+    </div>
+  )
+}
+
+function StickyNote({ task, color, tilt, onEdit }: {
+  task: Task
+  color: 'purple' | 'amber'
+  tilt: number
+  onEdit: (t: Task) => void
+}) {
+  const colors = {
+    purple: 'bg-purple-500/15 border-purple-400/30 hover:border-purple-400/60',
+    amber: 'bg-amber-500/15 border-amber-400/30 hover:border-amber-400/60',
+  }
+  return (
+    <button
+      onClick={() => onEdit(task)}
+      title="Click to view details"
+      className={`relative w-full text-left rounded-xl border p-3 pt-4 shadow-lg shadow-black/20 transition-all hover:-translate-y-0.5 hover:rotate-0 ${colors[color]} ${tilt % 2 ? 'rotate-[0.5deg]' : 'rotate-[-0.5deg]'}`}
+    >
+      <Pin size={12} className="absolute top-1.5 left-1/2 -translate-x-1/2 text-slate-400/70" />
+      <p className="text-sm font-medium text-white">{task.title}</p>
+      {task.due_date && (
+        <p className="text-[10px] text-slate-400 mt-1 flex items-center gap-1">
+          <CalendarDays size={10} /> {fmtDate(task.due_date)}
+        </p>
+      )}
+      {task.description && <p className="text-xs text-slate-400 mt-1 line-clamp-2">{task.description}</p>}
+    </button>
+  )
+}
+
 function driveFileId(url: string): string | null {
   const m = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || url.match(/[?&]id=([a-zA-Z0-9_-]+)/)
   return m ? m[1] : null
@@ -764,7 +910,8 @@ function DocPreview({ url }: { url: string }) {
   )
 }
 
-function TeamDocuments() {
+function TeamDocuments({ variant }: { variant?: 'board' }) {
+  const board = variant === 'board'
   const [docs, setDocs] = useState<TeamDocument[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -834,16 +981,22 @@ function TeamDocuments() {
   }
 
   return (
-    <div className="rounded-2xl bg-white/[0.03] border border-white/10 p-4 space-y-3">
-      <div className="flex items-center justify-between">
+    <div className={board ? 'rounded-2xl bg-white/[0.03] border border-white/10 p-3 min-h-[160px]' : 'rounded-2xl bg-white/[0.03] border border-white/10 p-4 space-y-3'}>
+      <div className={`flex items-center justify-between ${board ? 'px-1 pb-3' : ''}`}>
         <div className="flex items-center gap-2">
-          <FileText size={16} className="text-blue-400" />
+          <FileText size={board ? 15 : 16} className="text-blue-400" />
           <h2 className="text-sm font-semibold text-slate-200">Team Documents</h2>
           <span className="text-xs text-slate-500">{docs.length}</span>
         </div>
-        <button onClick={() => setAdding(!adding)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium text-slate-300 hover:text-white border border-white/10 hover:border-white/20 transition-colors">
-          <Plus size={14} /> Add document
-        </button>
+        {board ? (
+          <button onClick={() => setAdding(!adding)} className="text-slate-500 hover:text-white transition-colors" title="Pin a new document">
+            <Plus size={15} />
+          </button>
+        ) : (
+          <button onClick={() => setAdding(!adding)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium text-slate-300 hover:text-white border border-white/10 hover:border-white/20 transition-colors">
+            <Plus size={14} /> Add document
+          </button>
+        )}
       </div>
 
       {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
@@ -860,26 +1013,55 @@ function TeamDocuments() {
         </div>
       )}
 
-      <div className="space-y-2">
-        {docs.map(doc => (
-          <div key={doc.id} className="card p-3.5 flex items-start gap-3">
-            {doc.url ? <DocPreview url={doc.url} /> : <FileText size={16} className="text-slate-500 mt-0.5 shrink-0" />}
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-white">{doc.title}</p>
-              {doc.url && (
-                <a href={doc.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-purple-400 hover:text-purple-300 mt-1 truncate">
-                  <ExternalLink size={11} /> {doc.url}
-                </a>
-              )}
-              {doc.content && <p className="text-xs text-slate-400 mt-1 whitespace-pre-wrap">{doc.content}</p>}
+      {board ? (
+        <div className="space-y-2.5">
+          {docs.map((doc, i) => (
+            <div
+              key={doc.id}
+              className={`group relative rounded-xl border p-3 pt-4 shadow-lg shadow-black/20 bg-blue-500/15 border-blue-400/30 transition-all hover:-translate-y-0.5 hover:rotate-0 ${i % 2 ? 'rotate-[0.5deg]' : 'rotate-[-0.5deg]'}`}
+            >
+              <Pin size={12} className="absolute top-1.5 left-1/2 -translate-x-1/2 text-slate-400/70" />
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  {doc.url ? (
+                    <a href={doc.url} target="_blank" rel="noreferrer" className="text-sm font-medium text-white hover:text-blue-300 flex items-center gap-1.5">
+                      {doc.title} <ExternalLink size={11} className="text-blue-300 shrink-0" />
+                    </a>
+                  ) : (
+                    <p className="text-sm font-medium text-white">{doc.title}</p>
+                  )}
+                  {doc.content && <p className="text-xs text-slate-400 mt-1 line-clamp-2">{doc.content}</p>}
+                </div>
+                <button onClick={() => deleteDoc(doc)} className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400 transition-all shrink-0" title="Delete">
+                  <Trash2 size={13} />
+                </button>
+              </div>
             </div>
-            <button onClick={() => deleteDoc(doc)} className="text-slate-500 hover:text-red-400 transition-colors shrink-0" title="Delete">
-              <Trash2 size={14} />
-            </button>
-          </div>
-        ))}
-        {docs.length === 0 && !adding && <p className="text-xs text-slate-600 px-1 py-2">No documents yet — add links to Google Docs, SOPs, playbooks, anything the team needs</p>}
-      </div>
+          ))}
+          {docs.length === 0 && !adding && <p className="text-xs text-slate-600 px-1 py-2">No documents — pin one with +</p>}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {docs.map(doc => (
+            <div key={doc.id} className="card p-3.5 flex items-start gap-3">
+              {doc.url ? <DocPreview url={doc.url} /> : <FileText size={16} className="text-slate-500 mt-0.5 shrink-0" />}
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-white">{doc.title}</p>
+                {doc.url && (
+                  <a href={doc.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-purple-400 hover:text-purple-300 mt-1 truncate">
+                    <ExternalLink size={11} /> {doc.url}
+                  </a>
+                )}
+                {doc.content && <p className="text-xs text-slate-400 mt-1 whitespace-pre-wrap">{doc.content}</p>}
+              </div>
+              <button onClick={() => deleteDoc(doc)} className="text-slate-500 hover:text-red-400 transition-colors shrink-0" title="Delete">
+                <Trash2 size={14} />
+              </button>
+            </div>
+          ))}
+          {docs.length === 0 && !adding && <p className="text-xs text-slate-600 px-1 py-2">No documents yet — add links to Google Docs, SOPs, playbooks, anything the team needs</p>}
+        </div>
+      )}
     </div>
   )
 }
