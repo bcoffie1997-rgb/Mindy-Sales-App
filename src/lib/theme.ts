@@ -1,0 +1,18 @@
+export type Theme = 'dark' | 'light'
+
+const STORAGE_KEY = 'theme'
+
+export function getTheme(): Theme {
+  try {
+    return localStorage.getItem(STORAGE_KEY) === 'light' ? 'light' : 'dark'
+  } catch {
+    return 'dark'
+  }
+}
+
+export function applyTheme(theme: Theme) {
+  document.documentElement.classList.toggle('light', theme === 'light')
+  try {
+    localStorage.setItem(STORAGE_KEY, theme)
+  } catch { /* private mode */ }
+}

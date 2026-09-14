@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom'
-import { Users, UserCheck, Phone, Building2, Bot, Menu, X, Terminal, LockKeyhole, ListTodo } from 'lucide-react'
+import { Users, UserCheck, Phone, Building2, Bot, Menu, X, Terminal, LockKeyhole, ListTodo, Sun, Moon } from 'lucide-react'
 import { FormEvent, ReactNode, useEffect, useState } from 'react'
+import { applyTheme, getTheme, type Theme } from './lib/theme'
 import Tasks from './components/Tasks'
 import BDManagement from './components/BDManagement'
 import ClientsRevenue from './components/ClientsRevenue'
@@ -110,6 +111,13 @@ function AuthGate({ children }: { children: ReactNode }) {
 
 function DashboardApp() {
   const [menuOpen, setMenuOpen] = useState(false)
+  const [theme, setTheme] = useState<Theme>(getTheme)
+
+  function toggleTheme() {
+    const next: Theme = theme === 'dark' ? 'light' : 'dark'
+    applyTheme(next)
+    setTheme(next)
+  }
 
   return (
     <BrowserRouter>
@@ -134,7 +142,15 @@ function DashboardApp() {
             </nav>
 
             {/* Mobile hamburger */}
-            <div className="md:hidden flex-1" />
+            <div className="flex-1 md:hidden" />
+            <button
+              onClick={toggleTheme}
+              className="p-2 text-slate-400 hover:text-white transition-colors"
+              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            >
+              {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
             <button
               onClick={() => setMenuOpen(!menuOpen)}
               className="md:hidden p-2 text-slate-400 hover:text-white transition-colors"

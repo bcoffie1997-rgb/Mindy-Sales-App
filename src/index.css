@@ -69,3 +69,102 @@
     @apply badge bg-white/10 text-slate-300;
   }
 }
+
+/* ── Light mode ─────────────────────────────────────────────
+   Toggle adds `.light` to <html>. These rules remap the dark
+   utility palette to a light one, so components stay untouched.
+   Unlayered on purpose: they must beat @layer utilities. */
+
+.light body {
+  background-color: #f8fafc;
+  color: #0f172a;
+}
+
+/* Text */
+.light .text-white { color: #0f172a; }
+.light .text-slate-100, .light .text-slate-200 { color: #1e293b; }
+.light .text-slate-300 { color: #334155; }
+.light .text-slate-400 { color: #475569; }
+.light .text-slate-400\/70 { color: rgba(71, 85, 105, 0.7); }
+.light .text-slate-600 { color: #94a3b8; }
+
+/* Accent text: brighten for contrast on light backgrounds */
+.light .text-red-300, .light .text-red-400 { color: #dc2626; }
+.light .text-amber-300 { color: #b45309; }
+.light .text-amber-400 { color: #d97706; }
+.light .text-emerald-300, .light .text-emerald-400 { color: #059669; }
+.light .text-purple-300 { color: #7e22ce; }
+.light .text-purple-400 { color: #9333ea; }
+.light .text-blue-300, .light .text-blue-400 { color: #2563eb; }
+
+/* Surfaces */
+.light .bg-slate-950 { background-color: #f8fafc; }
+.light .bg-slate-950\/95 { background-color: rgba(248, 250, 252, 0.95); }
+.light .bg-slate-900 { background-color: #ffffff; }
+.light .bg-slate-900\/95 { background-color: rgba(255, 255, 255, 0.95); }
+.light .bg-slate-900\/50 { background-color: rgba(255, 255, 255, 0.6); }
+.light .bg-slate-800 { background-color: #f1f5f9; }
+.light .bg-white\/5 { background-color: rgba(15, 23, 42, 0.04); }
+.light .bg-white\/10 { background-color: rgba(15, 23, 42, 0.08); }
+.light .bg-white\/\[0\.03\] { background-color: rgba(15, 23, 42, 0.02); }
+.light .bg-white\/\[0\.05\] { background-color: rgba(15, 23, 42, 0.05); }
+.light .via-white\/\[0\.02\] { --tw-gradient-via: rgba(15, 23, 42, 0.02); }
+
+/* Borders & dividers */
+.light .border-white\/10 { border-color: rgba(15, 23, 42, 0.1); }
+.light .border-white\/5 { border-color: rgba(15, 23, 42, 0.06); }
+.light .border-white\/20 { border-color: rgba(15, 23, 42, 0.16); }
+.light .border-slate-700, .light .border-slate-600 { border-color: #cbd5e1; }
+.light .divide-white\/5 > * + * { border-color: rgba(15, 23, 42, 0.06); }
+
+/* Hover / focus states */
+.light .hover\:text-white:hover { color: #0f172a; }
+.light .hover\:text-slate-200:hover { color: #1e293b; }
+.light .hover\:text-slate-300:hover { color: #334155; }
+.light .hover\:bg-white\/5:hover { background-color: rgba(15, 23, 42, 0.05); }
+.light .hover\:bg-white\/10:hover { background-color: rgba(15, 23, 42, 0.08); }
+.light .hover\:bg-slate-800:hover { background-color: #e2e8f0; }
+.light .hover\:border-white\/20:hover { border-color: rgba(15, 23, 42, 0.2); }
+.light .focus\:bg-white\/\[0\.07\]:focus { background-color: rgba(15, 23, 42, 0.05); }
+
+/* Shared component classes */
+.light .card {
+  background-color: #ffffff;
+  border-color: rgba(15, 23, 42, 0.1);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+}
+.light .card-hover:hover { background-color: #f8fafc; }
+
+.light .btn-secondary {
+  background-color: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #1e293b;
+}
+.light .btn-secondary:hover { background-color: #e2e8f0; }
+
+.light .btn-ghost { color: #475569; }
+.light .btn-ghost:hover { background-color: rgba(15, 23, 42, 0.05); color: #0f172a; }
+
+.light .input-dark {
+  background-color: #ffffff;
+  border-color: rgba(15, 23, 42, 0.15);
+  color: #0f172a;
+}
+.light .input-dark::placeholder { color: #94a3b8; }
+.light .input-dark:focus {
+  background-color: #ffffff;
+  border-color: rgba(168, 85, 247, 0.5);
+}
+
+.light .badge-purple { background-color: rgba(168, 85, 247, 0.14); color: #7e22ce; }
+.light .badge-blue { background-color: rgba(59, 130, 246, 0.12); color: #1d4ed8; }
+.light .badge-green { background-color: rgba(16, 185, 129, 0.12); color: #047857; }
+.light .badge-amber { background-color: rgba(245, 158, 11, 0.15); color: #b45309; }
+.light .badge-red { background-color: rgba(239, 68, 68, 0.12); color: #b91c1c; }
+.light .badge-slate { background-color: rgba(15, 23, 42, 0.06); color: #475569; }
+
+/* White text on colored/gradient surfaces must stay white */
+.light .btn-primary { color: #ffffff; }
+.light .bg-purple-600.text-white,
+.light .bg-amber-600.text-white { color: #ffffff; }
+.light .from-blue-600 .text-white { color: #ffffff; }
