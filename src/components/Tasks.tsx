@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ComponentType, type DragEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ComponentType, type DragEvent, type ReactNode } from 'react'
 import { Plus, Trash2, UserPlus, X, ChevronLeft, ChevronRight, CalendarDays, Pencil, Check, Bell, Flag, LayoutGrid, List, Calendar, FileText, ExternalLink, Pin, GripVertical } from 'lucide-react'
 import { apiJSON, errorMessage } from '../lib/api'
 
@@ -75,6 +75,7 @@ export default function Tasks() {
   const [view, setView] = useState<'board' | 'list' | 'calendar'>('board')
   const [draggedTaskId, setDraggedTaskId] = useState<number | null>(null)
   const [dragTargetStatus, setDragTargetStatus] = useState<Task['status'] | null>(null)
+  const dragFinishedAt = useRef(0)
 
   async function load() {
     try {
@@ -868,10 +869,10 @@ function StickyNote({ task, color, tilt, onEdit }: {
     <button
       onClick={() => onEdit(task)}
       title="Click to view details"
-      className={`relative w-full text-left rounded-xl border p-3 pt-4 shadow-lg shadow-black/20 transition-all hover:-translate-y-0.5 hover:rotate-0 ${colors[color]} ${tilt % 2 ? 'rotate-[0.5deg]' : 'rotate-[-0.5deg]'}`}
+      className={`relative w-full text-left rounded-xl border p-3 shadow-lg shadow-black/20 transition-all hover:-translate-y-0.5 hover:rotate-0 ${colors[color]} ${tilt % 2 ? 'rotate-[0.5deg]' : 'rotate-[-0.5deg]'}`}
     >
-      <Pin size={12} className="absolute top-1.5 left-1/2 -translate-x-1/2 text-slate-400/70" />
-      <p className="text-sm font-medium text-white">{task.title}</p>
+      {color !== 'purple' && <Pin size={12} className="absolute top-1.5 left-1/2 -translate-x-1/2 text-slate-400/70" />}
+      <p className={`text-sm font-medium text-white ${color !== 'purple' ? 'pt-1' : ''}`}>{task.title}</p>
       {task.due_date && (
         <p className="text-[10px] text-slate-400 mt-1 flex items-center gap-1">
           <CalendarDays size={10} /> {fmtDate(task.due_date)}
