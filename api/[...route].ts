@@ -115,13 +115,53 @@ function isAuthenticated(req: VercelRequest) {
 // ── Supabase client (inlined; no relative imports to keep ESM happy) ──
 const SUPA_URL = (process.env.SUPABASE_URL || '').trim()
 const SUPA_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim()
+const SUPABASE_RETRY_ATTEMPTS = 5
+const RETRYABLE_SUPABASE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'PUT', 'PATCH', 'DELETE'])
+
+function retryDelay(attempt: number) {
+  return new Promise(resolve => setTimeout(resolve, 200 * (2 ** attempt)))
+}
+
+// Supabase's API gateway can occasionally return a short burst of 5xx responses
+// ("Bad Gateway" / "Failed to get API key info"). Retry operations that are safe
+// to replay so those transient failures do not take down the dashboard.
+export async function resilientSupabaseFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const requestMethod = input instanceof Request ? input.method : 'GET'
+  const method = String(init?.method || requestMethod).toUpperCase()
+  const canRetry = RETRYABLE_SUPABASE_METHODS.has(method)
+  let lastError: unknown
+
+  for (let attempt = 0; attempt < SUPABASE_RETRY_ATTEMPTS; attempt++) {
+    try {
+      const request = input instanceof Request ? input.clone() : input
+      const response = await fetch(request, init)
+      const isTransient = response.status >= 500 && response.status <= 504
+      if (!canRetry || !isTransient || attempt === SUPABASE_RETRY_ATTEMPTS - 1) return response
+      console.warn(`Supabase ${method} returned ${response.status}; retrying (${attempt + 2}/${SUPABASE_RETRY_ATTEMPTS})`)
+    } catch (err) {
+      lastError = err
+      if (!canRetry || init?.signal?.aborted || attempt === SUPABASE_RETRY_ATTEMPTS - 1) throw err
+      console.warn(`Supabase ${method} request failed; retrying (${attempt + 2}/${SUPABASE_RETRY_ATTEMPTS})`)
+    }
+    await retryDelay(attempt)
+  }
+
+  throw lastError
+}
+
 let initError: string | null = null
 let supabase: any
 try {
-  supabase = createClient(SUPA_URL || 'https://placeholder.supabase.co', SUPA_KEY || 'placeholder', { auth: { persistSession: false } })
+  supabase = createClient(SUPA_URL || 'https://placeholder.supabase.co', SUPA_KEY || 'placeholder', {
+    auth: { persistSession: false },
+    global: { fetch: resilientSupabaseFetch },
+  })
 } catch (err: any) {
   initError = err?.message || String(err)
-  supabase = createClient('https://placeholder.supabase.co', 'placeholder', { auth: { persistSession: false } })
+  supabase = createClient('https://placeholder.supabase.co', 'placeholder', {
+    auth: { persistSession: false },
+    global: { fetch: resilientSupabaseFetch },
+  })
 }
 const supabaseReady = !!(SUPA_URL && SUPA_KEY) && !initError
 const supabaseUrlValue = SUPA_URL
