@@ -461,6 +461,7 @@ export default function Tasks() {
                       draggable
                       onDragStart={event => startDrag(event, task)}
                       onDragEnd={() => {
+                        dragFinishedAt.current = Date.now()
                         setDraggedTaskId(null)
                         setDragTargetStatus(null)
                       }}
@@ -474,7 +475,20 @@ export default function Tasks() {
                         event.stopPropagation()
                         dropTask(col.key, task.id)
                       }}
-                      className={`card p-3.5 space-y-2 cursor-grab active:cursor-grabbing transition-opacity ${
+                      onClick={event => {
+                        if (Date.now() - dragFinishedAt.current < 250) return
+                        if ((event.target as HTMLElement).closest('button, a, input, select, textarea')) return
+                        openEdit(task)
+                      }}
+                      onKeyDown={event => {
+                        if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return
+                        event.preventDefault()
+                        openEdit(task)
+                      }}
+                      role="button"
+                      tabIndex={0}
+                      title="Click to view details"
+                      className={`card p-3.5 space-y-2 cursor-grab active:cursor-grabbing transition-opacity focus:outline-none focus:ring-2 focus:ring-purple-500/50 ${
                         draggedTaskId === task.id ? 'opacity-40' : ''
                       }`}
                     >
@@ -482,9 +496,7 @@ export default function Tasks() {
                         <div className="flex items-start gap-2 min-w-0">
                           <GripVertical size={15} className="mt-0.5 shrink-0 text-slate-600" aria-hidden="true" />
                           <p
-                            onClick={() => openEdit(task)}
-                            title="Click to view details"
-                            className={`cursor-pointer text-sm font-medium ${task.status === 'done' ? 'text-slate-500 line-through' : 'text-white'}`}
+                            className={`text-sm font-medium ${task.status === 'done' ? 'text-slate-500 line-through' : 'text-white'}`}
                           >
                             {task.title}
                           </p>
@@ -623,7 +635,21 @@ function TeamRow({ task, showDue, showPriority = true, permanent = false, onComp
 }) {
   const due = dueState(task.due_date, task.status)
   return (
-    <div className="card p-3 flex items-center gap-3">
+    <div
+      onClick={event => {
+        if ((event.target as HTMLElement).closest('button, a, input, select, textarea')) return
+        onEdit(task)
+      }}
+      onKeyDown={event => {
+        if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return
+        event.preventDefault()
+        onEdit(task)
+      }}
+      role="button"
+      tabIndex={0}
+      title="Click to view details"
+      className="card p-3 flex items-center gap-3 cursor-pointer focus:outline-none focus:ring-2 focus:ring-purple-500/50"
+    >
       {permanent ? (
         <Flag size={14} className="text-purple-400 shrink-0" />
       ) : (
@@ -635,7 +661,7 @@ function TeamRow({ task, showDue, showPriority = true, permanent = false, onComp
           <Check size={13} />
         </button>
       )}
-      <div className="flex-1 min-w-0 cursor-pointer" onClick={() => onEdit(task)} title="Click to view details">
+      <div className="flex-1 min-w-0">
         <p className="text-sm font-medium text-white truncate">{task.title}</p>
         <div className="flex items-center gap-2 flex-wrap mt-1">
           {showPriority && (
