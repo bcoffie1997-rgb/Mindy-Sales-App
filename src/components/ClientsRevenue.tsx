@@ -5,13 +5,13 @@ import Revenue from './Revenue'
 import Payments from './Payments'
 
 const tabs = [
-  { key: 'clients', label: 'Clients', icon: UserCheck },
   { key: 'revenue', label: 'Revenue', icon: DollarSign },
   { key: 'payments', label: 'Payments', icon: CreditCard },
+  { key: 'clients', label: 'Clients', icon: UserCheck },
 ]
 
 export default function ClientsRevenue() {
-  const [activeTab, setActiveTab] = useState('clients')
+  const [activeTab, setActiveTab] = useState('revenue')
 
   return (
     <div className="flex flex-col min-h-full">
