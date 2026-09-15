@@ -44,7 +44,7 @@ export default function BDManagement() {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    apiJSON<Client[]>('/api/clients')
+    apiJSON<Client[]>('/api/managed-clients')
       .then(data => {
         if (!Array.isArray(data)) throw new Error('Invalid clients response')
         setClients(data)

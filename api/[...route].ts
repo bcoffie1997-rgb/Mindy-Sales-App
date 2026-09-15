@@ -394,6 +394,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.json((data||[]).map(normalizeLead))
     }
 
+    // GET /api/managed-clients — BD/consulting management roster: any row flagged
+    // managed in metadata, whether it's a paying client or still a pipeline lead
+    if (path === 'managed-clients') {
+      const data = await fetchAllRows('leads', '*', (q:any) => q.order('created_at',{ascending:false}))
+      return res.json((data||[]).filter((l:any) => l.metadata?.managed).map(normalizeLead))
+    }
+
     // GET/PATCH /api/leads?id=...  (Vercel only routes single-segment paths to this
     // function, so /api/leads/:id never reaches us — the id comes via query instead)
     if (path === 'leads' && typeof req.query.id === 'string' && req.query.id) {
