@@ -812,6 +812,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       })
     }
 
+    // POST /api/update-leads  { updates: [{ id, name?, company?, ... }] } — bulk partial update.
+    // Requires: Authorization: Bearer $LEAD_ADMIN_TOKEN
+    if (path === 'update-leads') {
+      if (method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
+      const token = process.env.LEAD_ADMIN_TOKEN
+      if (!token || req.headers.authorization !== `Bearer ${token}`) {
+        return res.status(401).json({ error: 'Unauthorized' })
+      }
+      const list = Array.isArray(req.body?.updates) ? req.body.updates : []
+      if (!list.length || list.length > 1000) return res.status(400).json({ error: 'updates array (1-1000 entries) is required' })
+      const ALLOWED = ['name', 'company', 'phone', 'email', 'score', 'status', 'notes', 'source']
+      let updated = 0
+      const errors: any[] = []
+      for (const u of list) {
+        const id = typeof u?.id === 'string' ? u.id : ''
+        if (!id) continue
+        const fields: any = {}
+        for (const f of ALLOWED) if (u[f] !== undefined) fields[f] = u[f]
+        if (!Object.keys(fields).length) continue
+        const { error } = await supabase.from('leads').update(fields).eq('id', id)
+        if (error) errors.push({ id, error: error.message })
+        else updated++
+      }
+      return res.json({ ok: errors.length === 0, updated, errors: errors.slice(0, 10) })
+    }
+
     // POST /api/dedupe-leads  { dry?: boolean } — merge & remove duplicate leads that share an email.
     // Requires: Authorization: Bearer $LEAD_ADMIN_TOKEN. Dry-run is the default.
     if (path === 'dedupe-leads') {
