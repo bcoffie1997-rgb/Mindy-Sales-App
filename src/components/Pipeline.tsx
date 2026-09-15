@@ -59,6 +59,14 @@ function fmtMoney(v: number): string {
   return `$${Math.round(v).toLocaleString()}`
 }
 
+/** Standard products, stored as annual value so pipeline totals share one basis */
+const VALUE_PRESETS = [
+  { label: 'Mindy Monthly', sub: '$149/mo', value: 1788 },
+  { label: 'Mindy Yearly', sub: '$1,490/yr', value: 1490 },
+  { label: 'Consulting', sub: '$6,000', value: 6000 },
+  { label: 'BD', sub: '$4k/mo', value: 48000 },
+]
+
 export default function Pipeline() {
   const navigate = useNavigate()
   const scrollerRef = useRef<HTMLDivElement>(null)
@@ -67,6 +75,9 @@ export default function Pipeline() {
   const [error, setError] = useState('')
   const [draggedId, setDraggedId] = useState<string | null>(null)
   const [dropTarget, setDropTarget] = useState<string | null>(null)
+  const [editingValueId, setEditingValueId] = useState<string | null>(null)
+  const [customValue, setCustomValue] = useState('')
+  const [savingValue, setSavingValue] = useState(false)
 
   async function load() {
     try {
@@ -124,6 +135,28 @@ export default function Pipeline() {
     }
   }
 
+  async function saveValue(lead: Lead, amount: number) {
+    if (!Number.isFinite(amount) || amount < 0) return
+    setSavingValue(true)
+    const previous = leads
+    const metadata = { ...(lead.metadata || {}), opp_value: amount }
+    setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, metadata } : l))
+    try {
+      await apiJSON(`/api/leads/${encodeURIComponent(lead.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ metadata }),
+      })
+      setEditingValueId(null)
+      setCustomValue('')
+    } catch (err) {
+      setLeads(previous)
+      setError(errorMessage(err))
+    } finally {
+      setSavingValue(false)
+    }
+  }
+
   function startDrag(event: DragEvent<HTMLDivElement>, lead: Lead) {
     setDraggedId(lead.id)
     event.dataTransfer.effectAllowed = 'move'
@@ -177,7 +210,7 @@ export default function Pipeline() {
             <DollarSign size={18} className="text-purple-300" />
           </div>
           <div>
-            <p className="text-xs text-slate-500">Open pipeline</p>
+            <p className="text-xs text-slate-500">Open pipeline (annual value)</p>
             <p className="text-lg font-bold text-white">{fmtMoney(stats.pipelineValue)}</p>
             <p className="text-[10px] text-slate-500">{stats.pipelineCount} open lead{stats.pipelineCount === 1 ? '' : 's'}</p>
           </div>
@@ -187,7 +220,7 @@ export default function Pipeline() {
             <TrendingUp size={18} className="text-emerald-300" />
           </div>
           <div>
-            <p className="text-xs text-slate-500">Closed this month</p>
+            <p className="text-xs text-slate-500">Closed this month (annual value)</p>
             <p className="text-lg font-bold text-white">{fmtMoney(stats.closedValue)}</p>
             <p className="text-[10px] text-slate-500">{stats.closedCount} won this month</p>
           </div>
@@ -251,12 +284,66 @@ export default function Pipeline() {
                       </span>
                     </div>
                     {lead.company && <p className="text-xs text-slate-400 truncate">{lead.company}</p>}
-                    <div className="pt-0.5">
+                    <div className="flex items-center justify-between gap-2 pt-0.5">
                       <span className="text-[10px] text-slate-500">
                         {lead.last_action_date ? new Date(lead.last_action_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}
-                        {oppValue(lead) > 0 && <span className="text-purple-300 ml-1.5">{fmtMoney(oppValue(lead))}</span>}
                       </span>
+                      <button
+                        onClick={e => {
+                          e.stopPropagation()
+                          setEditingValueId(editingValueId === lead.id ? null : lead.id)
+                          setCustomValue('')
+                        }}
+                        className="text-[10px] font-medium text-purple-300 hover:text-purple-200 border border-purple-500/30 hover:border-purple-400/50 rounded-full px-2 py-0.5 transition-colors"
+                        title="Set deal value"
+                      >
+                        {oppValue(lead) > 0 ? fmtMoney(oppValue(lead)) : '$ Set value'}
+                      </button>
                     </div>
+                    {editingValueId === lead.id && (
+                      <div className="space-y-1.5 pt-1" onClick={e => e.stopPropagation()}>
+                        <div className="grid grid-cols-2 gap-1">
+                          {VALUE_PRESETS.map(p => (
+                            <button
+                              key={p.label}
+                              disabled={savingValue}
+                              onClick={() => saveValue(lead, p.value)}
+                              className="rounded-lg border border-white/10 bg-white/5 hover:border-purple-500/50 px-1.5 py-1 text-left transition-colors disabled:opacity-50"
+                            >
+                              <span className="block text-[10px] font-medium text-slate-200">{p.label}</span>
+                              <span className="block text-[9px] text-slate-500">{p.sub}</span>
+                            </button>
+                          ))}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number"
+                            min="0"
+                            placeholder="Custom $/yr"
+                            value={customValue}
+                            onChange={e => setCustomValue(e.target.value)}
+                            onKeyDown={e => e.key === 'Enter' && saveValue(lead, Number(customValue))}
+                            className="input-dark text-[10px] py-1 px-1.5 w-full min-w-0"
+                          />
+                          <button
+                            disabled={savingValue || !customValue}
+                            onClick={() => saveValue(lead, Number(customValue))}
+                            className="btn-primary text-[10px] px-2 py-1 shrink-0 disabled:opacity-50"
+                          >
+                            Save
+                          </button>
+                        </div>
+                        {oppValue(lead) > 0 && (
+                          <button
+                            disabled={savingValue}
+                            onClick={() => saveValue(lead, 0)}
+                            className="text-[9px] text-slate-500 hover:text-red-400 transition-colors"
+                          >
+                            Clear value
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))}
                 {stageLeads.length === 0 && <p className="text-xs text-slate-600 px-1 py-2">No leads</p>}
