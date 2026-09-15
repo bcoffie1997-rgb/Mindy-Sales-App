@@ -217,6 +217,8 @@ async function fetchAllRows(table: string, columns = '*', applyFilter?: (q: any)
   for (let from = 0; from < 100000; from += STEP) {
     let q = supabase.from(table).select(columns).range(from, from + STEP - 1)
     if (applyFilter) q = applyFilter(q)
+    // Deterministic tiebreaker so offset pagination never skips or repeats rows
+    q = q.order('id', { ascending: true })
     const { data, error } = await q
     if (error) throw error
     if (!data || !data.length) break
