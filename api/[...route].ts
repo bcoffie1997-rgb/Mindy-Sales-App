@@ -719,6 +719,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const { data: existingClients } = await supabase.from('leads').select('email').eq('type', 'client')
       const clientEmails = new Set((existingClients || []).map((c: any) => (c.email || '').toLowerCase()).filter(Boolean))
 
+      // Existing metadata per lead — opp_value is curated by hand in the dashboard,
+      // so the sync must preserve it (and never import GHL monetary values over it)
+      const existingMeta = new Map<string, any>()
+      for (const l of await fetchAllRows('leads', 'id,metadata')) {
+        existingMeta.set(l.id, l.metadata || {})
+      }
+
       function scoreFor(stage: string) {
         const s = stage.toLowerCase()
         if (s.includes('sold') || s.includes('won') || s.includes('closed')) return { score: 'HOT', status: 'closed_won' }
@@ -775,10 +782,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             last_action_date: opp.updatedAt || opp.lastStageChangeAt || new Date().toISOString(),
             notes: tags ? `Tags: ${tags}` : null,
             metadata: {
+              ...(existingMeta.get('ghl-' + cid) || {}),
               ghl_id: cid,
               ghl_opp_id: opp.id,
               ghl_stage: stage || null,
-              opp_value: opp.monetaryValue ?? null,
               opp_status: opp.status || null
             }
           })
@@ -822,7 +829,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       const list = Array.isArray(req.body?.updates) ? req.body.updates : []
       if (!list.length || list.length > 1000) return res.status(400).json({ error: 'updates array (1-1000 entries) is required' })
-      const ALLOWED = ['name', 'company', 'phone', 'email', 'score', 'status', 'notes', 'source']
+      const ALLOWED = ['name', 'company', 'phone', 'email', 'score', 'status', 'notes', 'source', 'metadata']
       let updated = 0
       const errors: any[] = []
       for (const u of list) {
