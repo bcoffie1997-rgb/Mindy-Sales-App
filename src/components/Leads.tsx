@@ -3,6 +3,7 @@ import { Search, ChevronDown, ChevronUp, ExternalLink, RefreshCw, ArrowRight, Do
 import { useNavigate } from 'react-router-dom'
 import { apiJSON, errorMessage } from '../lib/api'
 import Enterprise from './Enterprise'
+import Pipeline from './Pipeline'
 
 interface Lead {
   id: string
@@ -352,16 +353,17 @@ function LeadsList({ sourceFilter }: { sourceFilter?: string }) {
 }
 
 export default function Leads() {
-  const [tab, setTab] = useState<'leads' | 'enterprise' | 'conference'>('leads')
+  const [tab, setTab] = useState<'pipeline' | 'leads' | 'enterprise' | 'conference'>('pipeline')
 
   return (
     <div>
-      <div className="flex items-center gap-1 px-4 sm:px-6 border-b border-white/10">
+      <div className="flex items-center gap-1 px-4 sm:px-6 border-b border-white/10 overflow-x-auto">
+        <PageTab label="Pipeline" active={tab === 'pipeline'} onClick={() => setTab('pipeline')} />
         <PageTab label="Sales Leads" active={tab === 'leads'} onClick={() => setTab('leads')} />
         <PageTab label="Enterprise" active={tab === 'enterprise'} onClick={() => setTab('enterprise')} />
         <PageTab label="Conference Leads" active={tab === 'conference'} onClick={() => setTab('conference')} />
       </div>
-      {tab === 'leads' ? <LeadsList /> : tab === 'enterprise' ? <Enterprise /> : <LeadsList sourceFilter="Conference" />}
+      {tab === 'pipeline' ? <Pipeline /> : tab === 'leads' ? <LeadsList /> : tab === 'enterprise' ? <Enterprise /> : <LeadsList sourceFilter="Conference" />}
     </div>
   )
 }

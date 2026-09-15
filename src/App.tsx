@@ -13,9 +13,9 @@ import DetailView from './components/DetailView'
 
 const navItems = [
   { to: '/', icon: ListTodo, label: 'Team Dash' },
+  { to: '/leads', icon: Users, label: 'Leads / Pipeline' },
   { to: '/manage', icon: Building2, label: 'BD / Consulting' },
   { to: '/clients', icon: UserCheck, label: 'Clients / Revenue' },
-  { to: '/leads', icon: Users, label: 'Leads' },
   { to: '/mindy-cc', icon: Bot, label: 'Mindy Command Center' },
   { to: '/calls', icon: Phone, label: 'Calls' },
   { to: '/command-center', icon: Terminal, label: 'Command Center' },
