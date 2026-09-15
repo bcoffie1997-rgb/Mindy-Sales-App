@@ -810,6 +810,83 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       })
     }
 
+    // POST /api/dedupe-leads  { dry?: boolean } — merge & remove duplicate leads that share an email.
+    // Requires: Authorization: Bearer $LEAD_ADMIN_TOKEN. Dry-run is the default.
+    if (path === 'dedupe-leads') {
+      if (method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
+      const token = process.env.LEAD_ADMIN_TOKEN
+      if (!token || req.headers.authorization !== `Bearer ${token}`) {
+        return res.status(401).json({ error: 'Unauthorized' })
+      }
+      const dry = req.body?.dry !== false
+      const all = await fetchAllRows('leads', '*')
+      const norm = (s: any) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ')
+      const STATUS_RANK: Record<string, number> = {
+        unsubscribed: 0, new: 0, first_touch_drafted: 1, follow_up_drafted: 1,
+        no_show: 2, no_show_reengaged: 2, in_conversation: 2, meeting_interest: 2,
+        booked: 3, call_completed: 4, proposal_sent: 5, closed_won: 6, paid: 6, closed_lost: 6,
+      }
+      const SCORE_RANK: Record<string, number> = { HOT: 3, WARM: 2, BASIC: 1, COLD: 1 }
+      const byEmail = new Map<string, any[]>()
+      for (const l of all) {
+        const email = norm(l.email)
+        if (!email) continue
+        if (!byEmail.has(email)) byEmail.set(email, [])
+        byEmail.get(email)!.push(l)
+      }
+      const dupes = [...byEmail.entries()].filter(([, g]) => g.length > 1)
+      const report: any[] = []
+      let updated = 0, deleted = 0
+      for (const [email, group] of dupes) {
+        // Keeper: a paying client row first; otherwise a GHL-synced row (deleting that one
+        // would just re-import on the next sync); otherwise the most recently active row.
+        const sorted = [...group].sort((a, b) => {
+          const ka = (a.type === 'client' ? 4 : 0) + (String(a.id).startsWith('ghl-') ? 2 : 0)
+          const kb = (b.type === 'client' ? 4 : 0) + (String(b.id).startsWith('ghl-') ? 2 : 0)
+          if (ka !== kb) return kb - ka
+          return String(b.last_action_date || '').localeCompare(String(a.last_action_date || ''))
+        })
+        const keeper = sorted[0]
+        const donors = sorted.slice(1).filter(d => d.type !== 'client')
+        if (!donors.length) continue
+
+        // Merge the best of every row into the keeper
+        const mergedRow: any = { ...keeper }
+        for (const d of donors) {
+          if ((STATUS_RANK[d.status] ?? 1) > (STATUS_RANK[mergedRow.status] ?? 1)) mergedRow.status = d.status
+          if ((SCORE_RANK[d.score] ?? 0) > (SCORE_RANK[mergedRow.score] ?? 0)) mergedRow.score = d.score
+          for (const f of ['company', 'phone', 'notes', 'source']) {
+            if (!mergedRow[f] && d[f]) mergedRow[f] = d[f]
+          }
+          if ((d.last_action_date || '') > (mergedRow.last_action_date || '')) {
+            mergedRow.last_action_date = d.last_action_date
+            mergedRow.last_action = d.last_action || mergedRow.last_action
+          }
+          if (d.first_contact_date && (!mergedRow.first_contact_date || d.first_contact_date < mergedRow.first_contact_date)) {
+            mergedRow.first_contact_date = d.first_contact_date
+          }
+          mergedRow.follow_up_count = Math.max(mergedRow.follow_up_count || 0, d.follow_up_count || 0)
+        }
+        const updates: any = {}
+        for (const f of ['status', 'score', 'company', 'phone', 'notes', 'source', 'last_action', 'last_action_date', 'first_contact_date', 'follow_up_count']) {
+          if (mergedRow[f] !== keeper[f]) updates[f] = mergedRow[f]
+        }
+
+        report.push({ email, keep: keeper.id, remove: donors.map((d: any) => d.id), updates })
+        if (!dry) {
+          if (Object.keys(updates).length) {
+            const { error } = await supabase.from('leads').update(updates).eq('id', keeper.id)
+            if (error) throw error
+            updated++
+          }
+          const { error } = await supabase.from('leads').delete().in('id', donors.map((d: any) => d.id))
+          if (error) throw error
+          deleted += donors.length
+        }
+      }
+      return res.json({ dry, duplicateGroups: report.length, rowsRemoved: dry ? report.reduce((s, r) => s + r.remove.length, 0) : deleted, keepersUpdated: updated, report })
+    }
+
     // GET /api/transcripts  (optional ?lead=:id to filter to one lead)
     if (path === 'transcripts' && method === 'GET') {
       let q = supabase.from('transcripts').select('*').order('meeting_date', { ascending: false }).limit(200)
