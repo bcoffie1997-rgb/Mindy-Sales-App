@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type WheelEvent } from 'react'
-import { RefreshCw, ChevronLeft, ChevronRight, DollarSign, TrendingUp } from 'lucide-react'
+import { RefreshCw, ChevronLeft, ChevronRight, DollarSign, TrendingUp, Download } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { apiJSON, errorMessage } from '../lib/api'
 
@@ -8,10 +8,13 @@ interface Lead {
   name: string
   email: string
   company: string
+  phone?: string
+  source?: string
   score: string
   status: string
   last_action: string
   last_action_date: string
+  created_at?: string
   metadata?: { opp_value?: number | null } | null
 }
 
@@ -57,6 +60,11 @@ function fmtMoney(v: number): string {
   if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`
   if (v >= 1_000) return `$${(v / 1_000).toFixed(1)}k`
   return `$${Math.round(v).toLocaleString()}`
+}
+
+function csvCell(value: unknown): string {
+  const s = value == null ? '' : String(value)
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }
 
 /** Standard products, stored as annual value so pipeline totals share one basis */
@@ -174,6 +182,27 @@ export default function Pipeline() {
     scrollerRef.current?.scrollBy({ left: direction * 260, behavior: 'smooth' })
   }
 
+  function exportCSV(stageKey: string) {
+    const rows = stageKey === 'all' ? leads : (byStage.get(stageKey) || [])
+    if (!rows.length) return
+    const header = ['Name', 'Company', 'Email', 'Phone', 'Score', 'Stage', 'Value (annual $)', 'Last Action', 'Last Action Date', 'Source', 'Created']
+    const lines = [header.map(csvCell).join(',')]
+    for (const lead of rows) {
+      lines.push([
+        lead.name, lead.company, lead.email, lead.phone, lead.score,
+        stageFor(lead.status).label, oppValue(lead) || '',
+        lead.last_action, lead.last_action_date, lead.source, lead.created_at,
+      ].map(csvCell).join(','))
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `pipeline-${stageKey}-${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   function onWheel(event: WheelEvent<HTMLDivElement>) {
     const el = scrollerRef.current
     if (!el || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
@@ -190,6 +219,20 @@ export default function Pipeline() {
           <p className="text-xs text-slate-500 mt-0.5">Drag a card to move a lead to the next stage</p>
         </div>
         <div className="flex items-center gap-1">
+          <div className="relative flex items-center">
+            <Download size={14} className="absolute left-2.5 text-slate-500 pointer-events-none" />
+            <select
+              value=""
+              onChange={e => { if (e.target.value) exportCSV(e.target.value); e.target.value = '' }}
+              className="input-dark text-sm pl-8 pr-2 py-1.5 cursor-pointer"
+              title="Download a stage as CSV"
+              aria-label="Export pipeline as CSV"
+            >
+              <option value="" className="bg-slate-900">Export CSV…</option>
+              <option value="all" className="bg-slate-900">All leads</option>
+              {STAGES.map(s => <option key={s.key} value={s.key} className="bg-slate-900">{s.label}</option>)}
+            </select>
+          </div>
           <button onClick={() => scrollByCols(-1)} className="btn-ghost px-2" title="Scroll left" aria-label="Scroll left">
             <ChevronLeft size={18} />
           </button>
