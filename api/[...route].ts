@@ -394,6 +394,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.json((data||[]).map(normalizeLead))
     }
 
+    // GET/PATCH /api/leads?id=...  (Vercel only routes single-segment paths to this
+    // function, so /api/leads/:id never reaches us — the id comes via query instead)
+    if (path === 'leads' && typeof req.query.id === 'string' && req.query.id) {
+      const id = req.query.id
+      if (method === 'GET') {
+        const { data, error } = await supabase.from('leads').select('*').eq('id',id).single()
+        if (error) return res.status(404).json({ error:'Lead not found' })
+        return res.json(normalizeLead(data))
+      }
+      if (method === 'PATCH') {
+        const { data, error } = await supabase.from('leads').update({...req.body, last_action_date:new Date().toISOString()}).eq('id',id).select().single()
+        if (error) return res.status(404).json({ error:'Lead not found' })
+        return res.json(data)
+      }
+    }
+
     // GET /api/leads
     if (path === 'leads' && method === 'GET') {
       const data = await fetchAllRows('leads', '*', (q:any) => q.order('created_at',{ascending:false}))
@@ -455,6 +471,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         from: event.from || event.agent_name || 'unknown',
         type: event.type || event.event_type || 'unknown',
       })))
+    }
+
+    // GET /api/reports?type=...  (query form — nested /api/reports/:type doesn't route on Vercel)
+    if (path === 'reports' && typeof req.query.type === 'string' && req.query.type) {
+      const type = req.query.type, date = (req.query.date as string)||new Date().toISOString().slice(0,10)
+      const { data, error } = await supabase.from('reports').select('content').eq('filename',`${date}-${type}.md`).single()
+      if (error||!data) return res.status(404).json({ error:'Report not found' })
+      return res.json({ date, type, content:data.content })
     }
 
     // GET /api/reports

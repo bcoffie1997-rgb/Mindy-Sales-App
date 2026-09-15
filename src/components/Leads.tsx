@@ -128,7 +128,7 @@ function LeadsList({ sourceFilter }: { sourceFilter?: string }) {
 
   const updateLead = async (id: string, updates: Partial<Lead>) => {
     try {
-      await apiJSON(`/api/leads/${encodeURIComponent(id)}`, {
+      await apiJSON(`/api/leads?id=${encodeURIComponent(id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),

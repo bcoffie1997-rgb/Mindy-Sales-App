@@ -108,7 +108,7 @@ export default function DetailView({ mode = 'client' }: { mode?: 'client' | 'lea
       deliverables,
     }
     try {
-      const client = await apiJSON<any>(`/api/leads/${encodeURIComponent(id || '')}`, {
+      const client = await apiJSON<any>(`/api/leads?id=${encodeURIComponent(id || '')}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ client_tier: tier, notes, metadata: meta }),

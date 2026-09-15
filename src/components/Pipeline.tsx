@@ -132,7 +132,7 @@ export default function Pipeline() {
     const previous = leads
     setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, status: stage.status } : l))
     try {
-      await apiJSON(`/api/leads/${encodeURIComponent(lead.id)}`, {
+      await apiJSON(`/api/leads?id=${encodeURIComponent(lead.id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: stage.status }),
@@ -150,7 +150,7 @@ export default function Pipeline() {
     const metadata = { ...(lead.metadata || {}), opp_value: amount }
     setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, metadata } : l))
     try {
-      await apiJSON(`/api/leads/${encodeURIComponent(lead.id)}`, {
+      await apiJSON(`/api/leads?id=${encodeURIComponent(lead.id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ metadata }),

@@ -100,7 +100,7 @@ export default function ClientsList() {
     const meta = { ...client.metadata, managed }
     setClients(prev => prev.map(c => c.id === client.id ? { ...c, metadata: meta } : c))
     try {
-      await apiJSON(`/api/leads/${encodeURIComponent(client.id)}`, {
+      await apiJSON(`/api/leads?id=${encodeURIComponent(client.id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ metadata: meta }),

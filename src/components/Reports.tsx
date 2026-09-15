@@ -22,7 +22,7 @@ export default function Reports() {
     if (match) {
       const [, date, type] = match
       try {
-        const r = await fetch(`/api/reports/${type}?date=${date}`)
+        const r = await fetch(`/api/reports?type=${type}&date=${date}`)
         if (r.ok) {
           const data = await r.json()
           setActiveReport({ content: data.content, filename })
