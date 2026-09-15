@@ -1,6 +1,6 @@
 export type Theme = 'dark' | 'light'
 
-const STORAGE_KEY = 'theme'
+const STORAGE_KEY = 'theme-v2'
 
 export function getTheme(): Theme {
   try {
