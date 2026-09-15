@@ -251,22 +251,11 @@ export default function Pipeline() {
                       </span>
                     </div>
                     {lead.company && <p className="text-xs text-slate-400 truncate">{lead.company}</p>}
-                    <div className="flex items-center justify-between gap-2 pt-0.5" onClick={e => e.stopPropagation()}>
+                    <div className="pt-0.5">
                       <span className="text-[10px] text-slate-500">
                         {lead.last_action_date ? new Date(lead.last_action_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}
                         {oppValue(lead) > 0 && <span className="text-purple-300 ml-1.5">{fmtMoney(oppValue(lead))}</span>}
                       </span>
-                      <select
-                        value={stage.key}
-                        onChange={e => {
-                          const next = STAGES.find(s => s.key === e.target.value)
-                          if (next) moveTo(lead, next)
-                        }}
-                        className="input-dark text-[10px] py-0.5 px-1.5 w-auto"
-                        title="Move to stage"
-                      >
-                        {STAGES.map(s => <option key={s.key} value={s.key} className="bg-slate-900">{s.label}</option>)}
-                      </select>
                     </div>
                   </div>
                 ))}
