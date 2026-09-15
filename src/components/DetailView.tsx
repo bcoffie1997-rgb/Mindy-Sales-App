@@ -6,6 +6,7 @@ import { apiJSON, errorMessage } from '../lib/api'
 interface Task { id: string; text: string; done: boolean }
 interface Session { n: number; done: boolean; date: string; note: string }
 interface Deliverable { id: string; text: string; done: boolean }
+interface CallEntry { id: string; date: string; topics: string }
 
 const TIER_CONFIG: Record<string, { label: string; color: string }> = {
   mindy: { label: 'Mindy', color: 'bg-blue-500/20 text-blue-300 border-blue-500/30' },
@@ -45,6 +46,10 @@ export default function DetailView({ mode = 'client' }: { mode?: 'client' | 'lea
   const [sessions, setSessions] = useState<Session[]>([])
   const [deliverables, setDeliverables] = useState<Deliverable[]>([])
   const [newDeliverable, setNewDeliverable] = useState('')
+  const [callLog, setCallLog] = useState<CallEntry[]>([])
+  const [callsPerMonth, setCallsPerMonth] = useState<number | ''>('')
+  const [newCallDate, setNewCallDate] = useState('')
+  const [newCallTopics, setNewCallTopics] = useState('')
   const autoSaveRef = useRef(false)
 
   const isManagement = mode === 'management'
@@ -78,6 +83,8 @@ export default function DetailView({ mode = 'client' }: { mode?: 'client' | 'lea
         autoSaveRef.current = true
       }
       setDeliverables(delivs)
+      setCallLog(Array.isArray(meta.call_log) ? meta.call_log : [])
+      setCallsPerMonth(typeof meta.calls_per_month === 'number' ? meta.calls_per_month : '')
     }
     setData(result)
     setLoading(false)
@@ -90,7 +97,7 @@ export default function DetailView({ mode = 'client' }: { mode?: 'client' | 'lea
     if (!dirty || loading || !data?.client) return
     const t = setTimeout(() => save(), 900)
     return () => clearTimeout(t)
-  }, [dirty, tier, consultant, currentStatus, nextStep, notes, tasks, managed, sessionsTotal, sessions, deliverables])
+  }, [dirty, tier, consultant, currentStatus, nextStep, notes, tasks, managed, sessionsTotal, sessions, deliverables, callLog, callsPerMonth])
 
   async function save() {
     if (!data?.client) return
@@ -106,6 +113,8 @@ export default function DetailView({ mode = 'client' }: { mode?: 'client' | 'lea
       sessions_total: sessionsTotal === '' ? null : Number(sessionsTotal),
       sessions,
       deliverables,
+      call_log: callLog,
+      calls_per_month: callsPerMonth === '' ? null : Number(callsPerMonth),
     }
     try {
       const client = await apiJSON<any>(`/api/leads?id=${encodeURIComponent(id || '')}`, {
@@ -156,6 +165,24 @@ export default function DetailView({ mode = 'client' }: { mode?: 'client' | 'lea
     markDirty()
   }
 
+  function addCallEntry() {
+    if (!newCallTopics.trim()) return
+    const entry: CallEntry = {
+      id: `c${Date.now()}`,
+      date: newCallDate || new Date().toISOString().slice(0, 10),
+      topics: newCallTopics.trim(),
+    }
+    setCallLog(prev => [entry, ...prev])
+    setNewCallDate('')
+    setNewCallTopics('')
+    markDirty()
+  }
+
+  function removeCallEntry(entryId: string) {
+    setCallLog(prev => prev.filter(c => c.id !== entryId))
+    markDirty()
+  }
+
   if (loading) return <div className="p-8 text-slate-400">Loading…</div>
   if (!data?.client) return (
     <div className="p-8 text-slate-400">Not found. <Link to={backPath} className="text-purple-400">Back</Link></div>
@@ -171,6 +198,8 @@ export default function DetailView({ mode = 'client' }: { mode?: 'client' | 'lea
   const sessDone = sessions.filter(s => s.done).length
   const delivsDone = deliverables.filter(d => d.done).length
   const pct = deliverables.length ? Math.round(delivsDone / deliverables.length * 100) : sessTotal ? Math.round(sessDone / sessTotal * 100) : 0
+  const monthPrefix = new Date().toISOString().slice(0, 7)
+  const callsThisMonth = callLog.filter(c => (c.date || '').startsWith(monthPrefix)).length
 
   return (
     <div className="p-4 sm:p-6 space-y-5 max-w-4xl">
@@ -304,6 +333,69 @@ export default function DetailView({ mode = 'client' }: { mode?: 'client' | 'lea
           />
         </div>
       </div>
+
+      {/* Call log — how many calls they get & what was discussed */}
+      {isManagement && (
+        <div className="card p-4 space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+              <Phone size={14} className="text-purple-400" /> Call Log
+            </h3>
+            <span className="text-xs text-slate-500">
+              {callsPerMonth !== '' ? `${callsThisMonth}/${Number(callsPerMonth)} calls this month` : `${callsThisMonth} calls this month`}
+              {' · '}{callLog.length} total
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr] gap-3 items-start">
+            <div>
+              <label className="text-xs text-slate-500 block mb-1">Calls per month</label>
+              <input
+                type="number"
+                min="0"
+                value={callsPerMonth}
+                onChange={e => { setCallsPerMonth(e.target.value === '' ? '' : Number(e.target.value)); markDirty() }}
+                className="input-dark w-full text-sm"
+                placeholder="e.g. 4"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 block mb-1">Log a call</label>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="date"
+                  value={newCallDate}
+                  onChange={e => setNewCallDate(e.target.value)}
+                  className="input-dark text-sm sm:w-36"
+                />
+                <input
+                  value={newCallTopics}
+                  onChange={e => setNewCallTopics(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && addCallEntry()}
+                  className="input-dark flex-1 text-sm"
+                  placeholder="What was talked about…"
+                />
+                <button onClick={addCallEntry} className="btn-ghost border border-white/10 px-3 shrink-0">
+                  <Plus size={16} />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {callLog.length > 0 && (
+            <div className="space-y-1.5">
+              {callLog.map(c => (
+                <div key={c.id} className="flex items-start gap-3 py-1.5 border-b border-white/5 last:border-0">
+                  <span className="text-xs text-slate-500 shrink-0 w-20 pt-0.5">{fmtDate(c.date)}</span>
+                  <span className="flex-1 text-sm text-slate-200">{c.topics}</span>
+                  <button onClick={() => removeCallEntry(c.id)} className="text-slate-600 hover:text-red-400 text-xs transition-colors shrink-0">✕</button>
+                </div>
+              ))}
+            </div>
+          )}
+          {callLog.length === 0 && <p className="text-xs text-slate-600">No calls logged yet</p>}
+        </div>
+      )}
 
       {/* Deliverables */}
       {(deliverables.length > 0 || mode === 'client' || isManagement) && (

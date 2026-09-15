@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Building2, Search } from 'lucide-react'
+import { Building2, Search, Phone } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { apiJSON, errorMessage } from '../lib/api'
 
@@ -10,7 +10,17 @@ interface Client {
     managed?: boolean; consultant?: string; current_status?: string
     next_step?: string; sessions_total?: number; sessions?: any[]
     deliverables?: any[]; tasks?: any[]
+    call_log?: { id: string; date: string; topics: string }[]
+    calls_per_month?: number | null
   }
+}
+
+function getCallStats(client: Client): { total: number; thisMonth: number; perMonth: number | null } {
+  const log = Array.isArray(client.metadata?.call_log) ? client.metadata!.call_log! : []
+  const monthPrefix = new Date().toISOString().slice(0, 7)
+  const thisMonth = log.filter(c => (c?.date || '').startsWith(monthPrefix)).length
+  const perMonth = typeof client.metadata?.calls_per_month === 'number' ? client.metadata.calls_per_month : null
+  return { total: log.length, thisMonth, perMonth }
 }
 
 function getProgress(client: Client): { pct: number; label: string } {
@@ -129,6 +139,16 @@ export default function BDManagement() {
                 </div>
 
                 <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap sm:justify-end">
+                  {(() => {
+                    const cs = getCallStats(client)
+                    if (!cs.total && cs.perMonth == null) return null
+                    return (
+                      <span className="text-xs text-slate-400 flex items-center gap-1 flex-shrink-0" title={`${cs.total} calls logged total`}>
+                        <Phone size={11} className="text-purple-400" />
+                        {cs.perMonth != null ? `${cs.thisMonth}/${cs.perMonth} calls this mo` : `${cs.total} calls`}
+                      </span>
+                    )
+                  })()}
                   {client.metadata?.current_status && (
                     <span className="text-xs text-slate-400 truncate max-w-[200px]">{client.metadata.current_status}</span>
                   )}
