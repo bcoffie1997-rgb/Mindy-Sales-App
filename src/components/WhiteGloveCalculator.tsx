@@ -25,6 +25,10 @@ interface ServiceTemplate {
   setup: number
   monthly: number
   included?: boolean
+  pricingMode?: 'hourly'
+  hours?: number
+  hourlyRate?: number
+  hourlyBilling?: 'setup' | 'monthly'
   icon: typeof Bot
 }
 
@@ -60,6 +64,10 @@ const SERVICE_CATALOG: ServiceTemplate[] = [
     description: 'Relationship development, outreach coordination, and contact follow-up.',
     setup: 0,
     monthly: 0,
+    pricingMode: 'hourly',
+    hours: 10,
+    hourlyRate: 0,
+    hourlyBilling: 'monthly',
     icon: Users,
   },
   {
@@ -67,7 +75,11 @@ const SERVICE_CATALOG: ServiceTemplate[] = [
     name: 'Dedicated BD Assistant',
     description: 'Full-time trained assistant handling federal calls, email, follow-up, and opportunity tracking.',
     setup: 0,
-    monthly: 1300,
+    monthly: 0,
+    pricingMode: 'hourly',
+    hours: 160,
+    hourlyRate: 8.125,
+    hourlyBilling: 'monthly',
     icon: UserRoundCog,
   },
   {
@@ -76,6 +88,10 @@ const SERVICE_CATALOG: ServiceTemplate[] = [
     description: 'Pipeline oversight, weekly strategy, accountability, and pursuit management.',
     setup: 0,
     monthly: 0,
+    pricingMode: 'hourly',
+    hours: 10,
+    hourlyRate: 0,
+    hourlyBilling: 'monthly',
     icon: BriefcaseBusiness,
   },
   {
@@ -107,8 +123,12 @@ const SERVICE_CATALOG: ServiceTemplate[] = [
     key: 'assistant-training',
     name: 'Assistant Training',
     description: '10 hours of live federal etiquette, capability statement, and opportunity-tracking training.',
-    setup: 500,
+    setup: 0,
     monthly: 0,
+    pricingMode: 'hourly',
+    hours: 10,
+    hourlyRate: 50,
+    hourlyBilling: 'setup',
     icon: Sparkles,
   },
   {
@@ -133,6 +153,26 @@ function makeId() {
 function lineFromTemplate(template: ServiceTemplate): ServiceLine {
   const { icon: _icon, ...line } = template
   return { ...line, id: makeId(), quantity: 1 }
+}
+
+function normalizeSavedLines(savedLines: ServiceLine[]) {
+  return savedLines.map(line => {
+    const template = SERVICE_CATALOG.find(service => service.key === line.key)
+    if (template?.pricingMode !== 'hourly') return { ...line, quantity: line.quantity || 1 }
+
+    const hours = line.hours ?? template.hours ?? 1
+    const oldTotal = template.hourlyBilling === 'setup' ? line.setup : line.monthly
+    return {
+      ...line,
+      pricingMode: 'hourly' as const,
+      hours,
+      hourlyRate: line.hourlyRate ?? (oldTotal ? oldTotal / hours : template.hourlyRate ?? 0),
+      hourlyBilling: line.hourlyBilling ?? template.hourlyBilling ?? 'monthly',
+      setup: 0,
+      monthly: 0,
+      quantity: 1,
+    }
+  })
 }
 
 function initialLines() {
@@ -162,6 +202,23 @@ function money(value: number) {
   }).format(value || 0)
 }
 
+function rateMoney(value: number) {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: Number.isInteger(value) ? 0 : 2,
+    maximumFractionDigits: 2,
+  }).format(value || 0)
+}
+
+function lineCharge(line: ServiceLine, billing: 'setup' | 'monthly') {
+  if (line.included) return 0
+  if (line.pricingMode === 'hourly') {
+    return line.hourlyBilling === billing ? (line.hours || 0) * (line.hourlyRate || 0) : 0
+  }
+  return line[billing] * line.quantity
+}
+
 function percent(value: number) {
   return Math.min(100, Math.max(0, Number(value) || 0))
 }
@@ -170,7 +227,7 @@ export default function WhiteGloveCalculator() {
   const [lines, setLines] = useState<ServiceLine[]>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null')
-      return Array.isArray(saved?.lines) ? saved.lines : initialLines()
+      return Array.isArray(saved?.lines) ? normalizeSavedLines(saved.lines) : initialLines()
     } catch {
       return initialLines()
     }
@@ -190,8 +247,8 @@ export default function WhiteGloveCalculator() {
   }, [lines, details])
 
   const totals = useMemo(() => {
-    const setupSubtotal = lines.reduce((sum, line) => sum + (line.included ? 0 : line.setup * line.quantity), 0)
-    const monthlySubtotal = lines.reduce((sum, line) => sum + (line.included ? 0 : line.monthly * line.quantity), 0)
+    const setupSubtotal = lines.reduce((sum, line) => sum + lineCharge(line, 'setup'), 0)
+    const monthlySubtotal = lines.reduce((sum, line) => sum + lineCharge(line, 'monthly'), 0)
     const setup = setupSubtotal * (1 - percent(details.setupDiscount) / 100)
     const monthly = monthlySubtotal * (1 - percent(details.monthlyDiscount) / 100)
     return {
@@ -204,10 +261,18 @@ export default function WhiteGloveCalculator() {
     }
   }, [details.monthlyDiscount, details.setupDiscount, lines])
 
-  const missingPrices = lines.filter(line => !line.included && line.setup === 0 && line.monthly === 0)
+  const selectedKeys = new Set(lines.map(line => line.key))
+  const availableServices = SERVICE_CATALOG.filter(service => !selectedKeys.has(service.key))
+  const missingPrices = lines.filter(line =>
+    !line.included && (line.pricingMode === 'hourly'
+      ? !line.hourlyRate || !line.hours
+      : line.setup === 0 && line.monthly === 0)
+  )
 
   function addService(template: ServiceTemplate) {
-    setLines(current => [...current, lineFromTemplate(template)])
+    setLines(current => current.some(line => line.key === template.key)
+      ? current
+      : [...current, lineFromTemplate(template)])
   }
 
   function addCustomService() {
@@ -251,6 +316,7 @@ export default function WhiteGloveCalculator() {
       if (template) {
         const newLine = lineFromTemplate(template)
         setLines(current => {
+          if (current.some(line => line.key === template.key)) return current
           const next = [...current]
           const index = beforeId ? next.findIndex(line => line.id === beforeId) : next.length
           next.splice(index < 0 ? next.length : index, 0, newLine)
@@ -289,16 +355,16 @@ export default function WhiteGloveCalculator() {
         </div>
       </div>
 
-      <div className="no-print grid grid-cols-1 xl:grid-cols-[320px_minmax(0,1fr)] gap-6">
+      <div className="no-print grid grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)] gap-6">
         <aside className="space-y-3">
           <div>
-            <h2 className="font-semibold text-white">Service catalog</h2>
-            <p className="text-xs text-slate-500 mt-0.5">Click Add or drag a service into the package.</p>
+            <h2 className="font-semibold text-white">Available services</h2>
+            <p className="text-xs text-slate-500 mt-0.5">Adding a service moves it to your selections on the right.</p>
           </div>
           <div className="space-y-2">
-            {SERVICE_CATALOG.map(service => {
+            {availableServices.map(service => {
               const Icon = service.icon
-              const hasPrice = service.included || service.setup > 0 || service.monthly > 0
+              const hasPrice = service.included || service.setup > 0 || service.monthly > 0 || Boolean(service.hourlyRate)
               return (
                 <div
                   key={service.key}
@@ -318,9 +384,11 @@ export default function WhiteGloveCalculator() {
                       <p className="text-xs text-emerald-400 mt-1">
                         {service.included
                           ? 'Included'
+                          : service.pricingMode === 'hourly' && service.hourlyRate
+                            ? `${rateMoney(service.hourlyRate)}/hr · ${service.hours} hrs${service.hourlyBilling === 'monthly' ? '/mo' : ''}`
                           : hasPrice
                             ? [service.setup ? `${money(service.setup)} setup` : '', service.monthly ? `${money(service.monthly)}/mo` : ''].filter(Boolean).join(' · ')
-                            : 'Set price on call'}
+                            : service.pricingMode === 'hourly' ? 'Set hourly rate' : 'Set price on call'}
                       </p>
                     </div>
                     <button onClick={() => addService(service)} className="p-1.5 rounded-lg bg-white/5 text-slate-400 hover:text-white" title={`Add ${service.name}`}>
@@ -330,6 +398,11 @@ export default function WhiteGloveCalculator() {
                 </div>
               )
             })}
+            {availableServices.length === 0 && (
+              <div className="card p-5 text-center text-sm text-slate-500">
+                All services have been selected. Remove one from the right to return it here.
+              </div>
+            )}
           </div>
           <button onClick={addCustomService} className="btn-secondary w-full">
             <Plus size={15} /> Custom service
@@ -369,8 +442,8 @@ export default function WhiteGloveCalculator() {
           >
             <div className="flex items-center justify-between px-1 pb-1">
               <div>
-                <h2 className="font-semibold text-white">Package services</h2>
-                <p className="text-xs text-slate-500">Drag to reorder. Prices and descriptions are editable.</p>
+                <h2 className="font-semibold text-white">Your selections</h2>
+                <p className="text-xs text-slate-500">Selected services stay on the right. Drag to reorder.</p>
               </div>
               <span className="text-xs text-slate-500">{lines.length} services</span>
             </div>
@@ -403,48 +476,94 @@ export default function WhiteGloveCalculator() {
                     <GripVertical size={18} />
                   </button>
                   <div className="flex-1 min-w-0 space-y-3">
-                    <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_90px_120px_120px] gap-2">
+                    <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_100px_120px_130px] gap-2">
                       <input
                         aria-label="Service name"
                         className="input-dark w-full font-medium"
                         value={line.name}
                         onChange={event => updateLine(line.id, { name: event.target.value })}
                       />
-                      <label className="space-y-1">
-                        <span className="text-[10px] text-slate-500">Qty</span>
-                        <input
-                          aria-label="Quantity"
-                          type="number"
-                          min="1"
-                          className="input-dark w-full"
-                          value={line.quantity}
-                          onChange={event => updateLine(line.id, { quantity: Math.max(1, Number(event.target.value) || 1) })}
-                        />
-                      </label>
-                      <label className="space-y-1">
-                        <span className="text-[10px] text-slate-500">Setup</span>
-                        <input
-                          aria-label="Setup price"
-                          type="number"
-                          min="0"
-                          className="input-dark w-full"
-                          disabled={line.included}
-                          value={line.setup}
-                          onChange={event => updateLine(line.id, { setup: Math.max(0, Number(event.target.value) || 0) })}
-                        />
-                      </label>
-                      <label className="space-y-1">
-                        <span className="text-[10px] text-slate-500">Monthly</span>
-                        <input
-                          aria-label="Monthly price"
-                          type="number"
-                          min="0"
-                          className="input-dark w-full"
-                          disabled={line.included}
-                          value={line.monthly}
-                          onChange={event => updateLine(line.id, { monthly: Math.max(0, Number(event.target.value) || 0) })}
-                        />
-                      </label>
+                      {line.pricingMode === 'hourly' ? (
+                        <>
+                          <label className="space-y-1">
+                            <span className="text-[10px] text-slate-500">Hours</span>
+                            <input
+                              aria-label="Hours"
+                              type="number"
+                              min="0"
+                              step="0.5"
+                              className="input-dark w-full"
+                              disabled={line.included}
+                              value={line.hours || 0}
+                              onChange={event => updateLine(line.id, { hours: Math.max(0, Number(event.target.value) || 0) })}
+                            />
+                          </label>
+                          <label className="space-y-1">
+                            <span className="text-[10px] text-slate-500">Rate / hour</span>
+                            <input
+                              aria-label="Hourly rate"
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              className="input-dark w-full"
+                              disabled={line.included}
+                              value={line.hourlyRate || 0}
+                              onChange={event => updateLine(line.id, { hourlyRate: Math.max(0, Number(event.target.value) || 0) })}
+                            />
+                          </label>
+                          <label className="space-y-1">
+                            <span className="text-[10px] text-slate-500">Charged as</span>
+                            <select
+                              aria-label="Hourly billing period"
+                              className="input-dark w-full"
+                              disabled={line.included}
+                              value={line.hourlyBilling || 'monthly'}
+                              onChange={event => updateLine(line.id, { hourlyBilling: event.target.value as 'setup' | 'monthly' })}
+                            >
+                              <option value="monthly">Monthly</option>
+                              <option value="setup">One-time</option>
+                            </select>
+                          </label>
+                        </>
+                      ) : (
+                        <>
+                          <label className="space-y-1">
+                            <span className="text-[10px] text-slate-500">Qty</span>
+                            <input
+                              aria-label="Quantity"
+                              type="number"
+                              min="1"
+                              className="input-dark w-full"
+                              value={line.quantity}
+                              onChange={event => updateLine(line.id, { quantity: Math.max(1, Number(event.target.value) || 1) })}
+                            />
+                          </label>
+                          <label className="space-y-1">
+                            <span className="text-[10px] text-slate-500">Setup</span>
+                            <input
+                              aria-label="Setup price"
+                              type="number"
+                              min="0"
+                              className="input-dark w-full"
+                              disabled={line.included}
+                              value={line.setup}
+                              onChange={event => updateLine(line.id, { setup: Math.max(0, Number(event.target.value) || 0) })}
+                            />
+                          </label>
+                          <label className="space-y-1">
+                            <span className="text-[10px] text-slate-500">Monthly</span>
+                            <input
+                              aria-label="Monthly price"
+                              type="number"
+                              min="0"
+                              className="input-dark w-full"
+                              disabled={line.included}
+                              value={line.monthly}
+                              onChange={event => updateLine(line.id, { monthly: Math.max(0, Number(event.target.value) || 0) })}
+                            />
+                          </label>
+                        </>
+                      )}
                     </div>
                     <textarea
                       aria-label="Service description"
@@ -543,17 +662,20 @@ function ProposalPreview({ details, lines, totals }: {
             <div key={line.id} className="grid grid-cols-[minmax(0,1fr)_90px_110px] gap-4 py-3 items-start">
               <div>
                 <p className="font-semibold text-white">
-                  {line.name}{line.quantity > 1 ? ` × ${line.quantity}` : ''}
+                  {line.name}
+                  {line.pricingMode === 'hourly'
+                    ? ` · ${line.hours || 0} hours @ ${rateMoney(line.hourlyRate || 0)}/hr`
+                    : line.quantity > 1 ? ` × ${line.quantity}` : ''}
                 </p>
                 <p className="text-xs text-slate-400 mt-0.5">{line.description}</p>
               </div>
               <div className="text-right">
                 <p className="text-[10px] uppercase text-slate-500">Setup</p>
-                <p className="text-sm text-slate-200">{line.included ? 'Included' : line.setup ? money(line.setup * line.quantity) : '—'}</p>
+                <p className="text-sm text-slate-200">{line.included ? 'Included' : lineCharge(line, 'setup') ? money(lineCharge(line, 'setup')) : '—'}</p>
               </div>
               <div className="text-right">
                 <p className="text-[10px] uppercase text-slate-500">Monthly</p>
-                <p className="text-sm text-slate-200">{line.included ? 'Included' : line.monthly ? money(line.monthly * line.quantity) : '—'}</p>
+                <p className="text-sm text-slate-200">{line.included ? 'Included' : lineCharge(line, 'monthly') ? money(lineCharge(line, 'monthly')) : '—'}</p>
               </div>
             </div>
           ))}
