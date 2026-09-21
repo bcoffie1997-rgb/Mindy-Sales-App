@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom'
-import { Users, UserCheck, Phone, Building2, Bot, Menu, X, Terminal, LockKeyhole, ListTodo, Sun, Moon } from 'lucide-react'
+import { Users, UserCheck, Phone, Building2, Bot, Menu, X, Terminal, LockKeyhole, ListTodo, Sun, Moon, CircleDollarSign } from 'lucide-react'
 import { FormEvent, ReactNode, useEffect, useState } from 'react'
 import { applyTheme, getTheme, type Theme } from './lib/theme'
 import Tasks from './components/Tasks'
@@ -10,11 +10,13 @@ import MindyCC from './components/MindyCC'
 import Calls from './components/Calls'
 import CommandCenter from './components/CommandCenter'
 import DetailView from './components/DetailView'
+import WhiteGloveCalculator from './components/WhiteGloveCalculator'
 
 const navItems = [
   { to: '/', icon: ListTodo, label: 'Team Dash' },
   { to: '/leads', icon: Users, label: 'Leads / Pipeline' },
   { to: '/manage', icon: Building2, label: 'BD / Consulting' },
+  { to: '/pricing', icon: CircleDollarSign, label: 'Pricing Calculator' },
   { to: '/clients', icon: UserCheck, label: 'Clients / Revenue' },
   { to: '/mindy-cc', icon: Bot, label: 'Mindy Command Center' },
   { to: '/calls', icon: Phone, label: 'Calls' },
@@ -189,6 +191,7 @@ function DashboardApp() {
             <Route path="/" element={<Tasks />} />
             <Route path="/manage" element={<BDManagement />} />
             <Route path="/manage/:id" element={<DetailView mode="management" />} />
+            <Route path="/pricing" element={<WhiteGloveCalculator />} />
             <Route path="/clients" element={<ClientsRevenue />} />
             <Route path="/clients/:id" element={<DetailView mode="client" />} />
             <Route path="/leads" element={<Leads />} />
