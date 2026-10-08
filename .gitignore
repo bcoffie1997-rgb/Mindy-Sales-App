@@ -35,3 +35,6 @@ Thumbs.db
 *.swo
 .vercel
 .env*
+
+# Database backups (real PII — never commit)
+backups/

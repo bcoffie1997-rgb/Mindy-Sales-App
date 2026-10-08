@@ -1,0 +1,31 @@
+-- ============================================================================
+-- Pipeline cleanup — 2026-10-08 — SHARED DATASET (reference copy)
+-- ============================================================================
+-- This is the single source of truth for the 23 people being updated.
+-- It is INLINED verbatim into 02-dry-run.sql and 03-apply.sql so the dry run
+-- and the apply can never drift apart. If you edit a row here, edit it in
+-- both of those files too (or just re-run the generator in this folder's
+-- README). Nothing in this file executes on its own.
+--
+-- Columns:
+--   ref                 your list number
+--   full_name           name used for the name-fallback match
+--   alt_name            second spelling to try on the name match (nullable)
+--   company             written only when creating a NEW row
+--   email               primary match key (case-insensitive)
+--   new_status          the exact `status` value the Pipeline STAGES array writes
+--   opp_value           metadata.opp_value; NULL = leave the key alone entirely
+--   set_managed         metadata.managed = true  (shows row in BD / Consulting)
+--   sessions_total      metadata.sessions_total
+--   all_sessions_done   build a 12-element metadata.sessions array, all done
+--   note                appended to notes, never overwrites
+-- ============================================================================
+
+-- status values confirmed from src/components/Pipeline.tsx:35-41
+--   Interested    -> 'meeting_interest'
+--   Call Booked   -> 'booked'
+--   Call Done     -> 'call_completed'
+--   Proposal Sent -> 'proposal_sent'
+--   No Show       -> 'no_show'
+--   Won           -> 'closed_won'
+--   Lost          -> 'closed_lost'
