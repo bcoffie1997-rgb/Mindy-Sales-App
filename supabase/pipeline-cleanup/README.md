@@ -52,6 +52,15 @@ editing only one of them would make the dry run lie about what the apply does.
 - Merges never delete. The duplicate row survives as `closed_lost` carrying a
   "Merged into X" note; the secondary email is written into the main row's notes.
 - The "AK" and ~$20K / ~$11K-per-month rows are **flagged only, never written**.
+- `in_pipeline` is only ever written as `true`, onto the 25 contacts. The
+  ~2,500 imported leads are never touched: `src/lib/pipeline.ts` treats a
+  missing key as false, so they simply stay off the board. Verified against a
+  2,500-row seed — 0 rows written false, 0 imported rows changed.
+- The three merged duplicates deliberately get no `in_pipeline` flag, so they
+  close out without cluttering the board.
+- `temperature` is `'hot' | 'warm' | 'cold'`; Won and Lost rows get none, so no
+  badge renders. Cards sort hot -> warm -> cold -> untagged, newest
+  `last_action_date` first inside each group.
 - Partial payments are real data: `amount_paid` and `balance_due` are JSONB
   numbers, `next_payment_due` a `'YYYY-MM-DD'` string. The app reads them via
   `src/lib/payments.ts`, shared by the roster and the detail page.

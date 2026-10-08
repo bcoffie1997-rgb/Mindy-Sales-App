@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type WheelEvent } from 'react'
-import { RefreshCw, ChevronLeft, ChevronRight, DollarSign, TrendingUp, Download } from 'lucide-react'
+import { RefreshCw, ChevronLeft, ChevronRight, DollarSign, TrendingUp, Download, Eye, EyeOff, Pin, PinOff } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { apiJSON, errorMessage } from '../lib/api'
+import { compareCards, isInPipeline, temperatureOf, TEMPERATURE_BADGE } from '../lib/pipeline'
 
 interface Lead {
   id: string
@@ -15,7 +16,11 @@ interface Lead {
   last_action: string
   last_action_date: string
   created_at?: string
-  metadata?: { opp_value?: number | null } | null
+  metadata?: {
+    opp_value?: number | null
+    in_pipeline?: boolean | null
+    temperature?: string | null
+  } | null
 }
 
 interface Stage {
@@ -83,6 +88,8 @@ export default function Pipeline() {
   const [error, setError] = useState('')
   const [draggedId, setDraggedId] = useState<string | null>(null)
   const [dropTarget, setDropTarget] = useState<string | null>(null)
+  const [showAll, setShowAll] = useState(false)
+  const [pinningId, setPinningId] = useState<string | null>(null)
   const [editingValueId, setEditingValueId] = useState<string | null>(null)
   const [customValue, setCustomValue] = useState('')
   const [savingValue, setSavingValue] = useState(false)
@@ -102,19 +109,25 @@ export default function Pipeline() {
 
   useEffect(() => { load() }, [])
 
+  // Only real deals by default. "Show all leads" reveals the full table,
+  // including the imported leads that carry no in_pipeline flag.
+  const visible = useMemo(
+    () => showAll ? leads : leads.filter(l => isInPipeline(l.metadata)),
+    [leads, showAll],
+  )
+
   const byStage = useMemo(() => {
     const map = new Map<string, Lead[]>(STAGES.map(s => [s.key, []]))
-    for (const lead of leads) map.get(stageFor(lead.status).key)!.push(lead)
-    for (const list of map.values()) {
-      list.sort((a, b) => (b.last_action_date || '').localeCompare(a.last_action_date || ''))
-    }
+    for (const lead of visible) map.get(stageFor(lead.status).key)!.push(lead)
+    // hot -> warm -> cold -> untagged, newest last_action_date first inside each
+    for (const list of map.values()) list.sort(compareCards)
     return map
-  }, [leads])
+  }, [visible])
 
   const stats = useMemo(() => {
     const monthPrefix = new Date().toISOString().slice(0, 7)
     let pipelineValue = 0, pipelineCount = 0, closedValue = 0, closedCount = 0
-    for (const lead of leads) {
+    for (const lead of visible) {
       const stage = stageFor(lead.status)
       if (stage.open) {
         pipelineCount++
@@ -125,7 +138,7 @@ export default function Pipeline() {
       }
     }
     return { pipelineValue, pipelineCount, closedValue, closedCount }
-  }, [leads])
+  }, [visible])
 
   async function moveTo(lead: Lead, stage: Stage) {
     if (stage.match.includes(lead.status)) return
@@ -165,6 +178,26 @@ export default function Pipeline() {
     }
   }
 
+  async function togglePipeline(lead: Lead) {
+    const next = !isInPipeline(lead.metadata)
+    setPinningId(lead.id)
+    const previous = leads
+    const metadata = { ...(lead.metadata || {}), in_pipeline: next }
+    setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, metadata } : l))
+    try {
+      await apiJSON(`/api/leads?id=${encodeURIComponent(lead.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ metadata }),
+      })
+    } catch (err) {
+      setLeads(previous)
+      setError(errorMessage(err))
+    } finally {
+      setPinningId(null)
+    }
+  }
+
   function startDrag(event: DragEvent<HTMLDivElement>, lead: Lead) {
     setDraggedId(lead.id)
     event.dataTransfer.effectAllowed = 'move'
@@ -183,7 +216,7 @@ export default function Pipeline() {
   }
 
   function exportCSV(stageKey: string) {
-    const rows = stageKey === 'all' ? leads : (byStage.get(stageKey) || [])
+    const rows = stageKey === 'all' ? visible : (byStage.get(stageKey) || [])
     if (!rows.length) return
     const header = ['Name', 'Company', 'Email', 'Phone', 'Score', 'Stage', 'Value (annual $)', 'Last Action', 'Last Action Date', 'Source', 'Created']
     const lines = [header.map(csvCell).join(',')]
@@ -216,9 +249,27 @@ export default function Pipeline() {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <h2 className="text-2xl font-bold text-white">Pipeline</h2>
-          <p className="text-xs text-slate-500 mt-0.5">Drag a card to move a lead to the next stage</p>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Drag a card to move a lead to the next stage
+            {showAll
+              ? ` · showing all ${leads.length} leads`
+              : ` · ${visible.length} of ${leads.length} leads on the board`}
+          </p>
         </div>
         <div className="flex items-center gap-1">
+          <button
+            onClick={() => setShowAll(v => !v)}
+            aria-pressed={showAll}
+            className={`flex items-center gap-1.5 text-sm px-2.5 py-1.5 rounded-xl border transition-colors ${
+              showAll
+                ? 'bg-purple-500/15 text-purple-200 border-purple-500/40'
+                : 'bg-white/5 text-slate-400 border-white/10 hover:text-slate-200'
+            }`}
+            title={showAll ? 'Showing every lead — click to show only pipeline deals' : 'Show every lead, including imported ones'}
+          >
+            {showAll ? <Eye size={14} /> : <EyeOff size={14} />}
+            {showAll ? 'All leads' : 'Pipeline only'}
+          </button>
           <div className="relative flex items-center">
             <Download size={14} className="absolute left-2.5 text-slate-500 pointer-events-none" />
             <select
@@ -322,8 +373,22 @@ export default function Pipeline() {
                   >
                     <div className="flex items-start justify-between gap-2">
                       <p className="text-sm font-medium text-white leading-snug">{lead.name}</p>
-                      <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full shrink-0 ${SCORE_CLASSES[lead.score] || 'bg-white/10 text-slate-400'}`}>
-                        {lead.score}
+                      <span className="flex items-center gap-1 shrink-0">
+                        {(() => {
+                          const temp = temperatureOf(lead.metadata)
+                          if (!temp) return null
+                          return (
+                            <span
+                              className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border uppercase ${TEMPERATURE_BADGE[temp]}`}
+                              title={`${temp} lead`}
+                            >
+                              {temp}
+                            </span>
+                          )
+                        })()}
+                        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${SCORE_CLASSES[lead.score] || 'bg-white/10 text-slate-400'}`}>
+                          {lead.score}
+                        </span>
                       </span>
                     </div>
                     {lead.company && <p className="text-xs text-slate-400 truncate">{lead.company}</p>}
@@ -331,17 +396,32 @@ export default function Pipeline() {
                       <span className="text-[10px] text-slate-500">
                         {lead.last_action_date ? new Date(lead.last_action_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}
                       </span>
-                      <button
-                        onClick={e => {
-                          e.stopPropagation()
-                          setEditingValueId(editingValueId === lead.id ? null : lead.id)
-                          setCustomValue('')
-                        }}
-                        className="text-[10px] font-medium text-purple-300 hover:text-purple-200 border border-purple-500/30 hover:border-purple-400/50 rounded-full px-2 py-0.5 transition-colors"
-                        title="Set deal value"
-                      >
-                        {oppValue(lead) > 0 ? fmtMoney(oppValue(lead)) : '$ Set value'}
-                      </button>
+                      <span className="flex items-center gap-1">
+                        <button
+                          disabled={pinningId === lead.id}
+                          onClick={e => { e.stopPropagation(); togglePipeline(lead) }}
+                          className={`flex items-center rounded-full border px-1.5 py-0.5 transition-colors disabled:opacity-50 ${
+                            isInPipeline(lead.metadata)
+                              ? 'text-emerald-300 border-emerald-500/30 hover:text-red-300 hover:border-red-500/40'
+                              : 'text-slate-500 border-white/10 hover:text-emerald-300 hover:border-emerald-500/40'
+                          }`}
+                          title={isInPipeline(lead.metadata) ? 'Remove from pipeline' : 'Add to pipeline'}
+                          aria-label={isInPipeline(lead.metadata) ? 'Remove from pipeline' : 'Add to pipeline'}
+                        >
+                          {isInPipeline(lead.metadata) ? <Pin size={11} /> : <PinOff size={11} />}
+                        </button>
+                        <button
+                          onClick={e => {
+                            e.stopPropagation()
+                            setEditingValueId(editingValueId === lead.id ? null : lead.id)
+                            setCustomValue('')
+                          }}
+                          className="text-[10px] font-medium text-purple-300 hover:text-purple-200 border border-purple-500/30 hover:border-purple-400/50 rounded-full px-2 py-0.5 transition-colors"
+                          title="Set deal value"
+                        >
+                          {oppValue(lead) > 0 ? fmtMoney(oppValue(lead)) : '$ Set value'}
+                        </button>
+                      </span>
                     </div>
                     {editingValueId === lead.id && (
                       <div className="space-y-1.5 pt-1" onClick={e => e.stopPropagation()}>
@@ -389,7 +469,11 @@ export default function Pipeline() {
                     )}
                   </div>
                 ))}
-                {stageLeads.length === 0 && <p className="text-xs text-slate-600 px-1 py-2">No leads</p>}
+                {stageLeads.length === 0 && (
+                  <p className="text-xs text-slate-600 px-1 py-2">
+                    {showAll ? 'No leads' : 'No pipeline deals'}
+                  </p>
+                )}
               </div>
             </div>
           )

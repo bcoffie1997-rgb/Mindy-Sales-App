@@ -19,6 +19,8 @@
 --   set_managed         metadata.managed = true  (shows row in BD / Consulting)
 --   sessions_total      metadata.sessions_total
 --   all_sessions_done   build a 12-element metadata.sessions array, all done
+--   in_pipeline         metadata.in_pipeline = true (puts the row on the board)
+--   temperature         metadata.temperature 'hot' | 'warm' | 'cold'; NULL = no badge
 --   amount_paid         metadata.amount_paid      (number)
 --   balance_due         metadata.balance_due      (number)
 --   next_payment_due    metadata.next_payment_due (string 'YYYY-MM-DD')

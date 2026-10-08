@@ -2,6 +2,7 @@
 -- STEP 4 — DRY RUN. READ-ONLY. Changes nothing. Run after 01-backup.sql.
 -- ============================================================================
 --   Q1  the change table: 25 contacts + 3 duplicate merges
+--       pipeline_change shows ON BOARD + the temperature badge each row gets
 --   Q2  every OTHER lead currently in the pipeline that is not on your list
 --   Q3  possible "AK" rows, and proposals worth ~$20K or ~$11K/month (FLAG ONLY)
 --   Q4  remaining duplicate / near-duplicate check
@@ -12,7 +13,8 @@
 WITH
 -- @@DATASET@@
 SELECT change_type, ref, name, matched_row_id, matched_how, status_change,
-       opp_value_change, last_action_date_change, payment_change, bd_flags, note_being_added
+       pipeline_change, opp_value_change, last_action_date_change, payment_change,
+       bd_flags, note_being_added
 FROM (
 SELECT
   1                                                        AS grp,
@@ -37,6 +39,8 @@ SELECT
          WHEN m.fallback_date IS NOT NULL THEN 'kept'
          WHEN l.status IS DISTINCT FROM m.new_status THEN 'today (stage moved)'
          ELSE 'kept' END                                   AS last_action_date_change,
+  CASE WHEN m.in_pipeline THEN 'ON BOARD' ELSE '' END
+    || COALESCE('  ' || upper(m.temperature), '')                AS pipeline_change,
   CASE WHEN m.amount_paid IS NULL AND m.balance_due IS NULL THEN NULL
        ELSE 'paid ' || COALESCE(m.amount_paid, 0)::text
             || ' / balance ' || COALESCE(m.balance_due, 0)::text
@@ -68,6 +72,7 @@ SELECT
   p.dup_status || ' -> closed_lost'                        AS status_change,
   'left as-is'                                             AS opp_value_change,
   'today (merged)'                                         AS last_action_date_change,
+  'not on board (merged away)'                             AS pipeline_change,
   NULL                                                     AS payment_change,
   NULL                                                     AS bd_flags,
   p.merge_note                                             AS note_being_added

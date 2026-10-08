@@ -13,6 +13,8 @@
 --   * never flips type to 'client' (that would remove the row from the board,
 --     because /api/leads-only filters type <> 'client')
 --   * never touches the "AK" / $20K / $11K-per-month flagged rows
+--   * never writes in_pipeline=false anywhere. The ~2.5k imported leads are
+--     left completely untouched; the board treats a missing key as false.
 -- ============================================================================
 
 BEGIN;
@@ -56,6 +58,10 @@ SET
               THEN jsonb_build_object('managed', true) ELSE '{}'::jsonb END
       || CASE WHEN u.sessions_total IS NOT NULL
               THEN jsonb_build_object('sessions_total', u.sessions_total) ELSE '{}'::jsonb END
+      || CASE WHEN u.in_pipeline
+              THEN jsonb_build_object('in_pipeline', true) ELSE '{}'::jsonb END
+      || CASE WHEN u.temperature IS NOT NULL
+              THEN jsonb_build_object('temperature', u.temperature) ELSE '{}'::jsonb END
       || CASE WHEN u.amount_paid IS NOT NULL
               THEN jsonb_build_object('amount_paid', u.amount_paid) ELSE '{}'::jsonb END
       || CASE WHEN u.balance_due IS NOT NULL
@@ -103,6 +109,10 @@ SELECT
               THEN jsonb_build_object('managed', true) ELSE '{}'::jsonb END
       || CASE WHEN n.sessions_total IS NOT NULL
               THEN jsonb_build_object('sessions_total', n.sessions_total) ELSE '{}'::jsonb END
+      || CASE WHEN n.in_pipeline
+              THEN jsonb_build_object('in_pipeline', true) ELSE '{}'::jsonb END
+      || CASE WHEN n.temperature IS NOT NULL
+              THEN jsonb_build_object('temperature', n.temperature) ELSE '{}'::jsonb END
       || CASE WHEN n.amount_paid IS NOT NULL
               THEN jsonb_build_object('amount_paid', n.amount_paid) ELSE '{}'::jsonb END
       || CASE WHEN n.balance_due IS NOT NULL
