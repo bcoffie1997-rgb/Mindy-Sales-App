@@ -23,9 +23,18 @@ table printed here. It reports exactly what the apply step will do.
 | 3 | `03-apply.sql` | Applies the 25 contacts, then closes the 3 duplicates, inside one transaction | **the write** |
 | 4 | `04-verify.sql` | Final board: count + total `opp_value` per stage, the two header cards, BD roster | read-only |
 
-`00-incoming.sql` and `_dataset.sql` are the shared dataset. `_dataset.sql` is
-inlined verbatim into both `02` and `03`, so the dry run and the apply can
-never disagree. **If you edit a person, edit them in `02` and `03` both.**
+### Editing the data
+
+`_dataset.sql` is the single source of truth. It is inlined into `02` and `03`
+(Supabase's editor has no `\i` include), so after **any** edit run:
+
+```sh
+python3 build.py
+```
+
+That regenerates `02-dry-run.sql` and `03-apply.sql` from `_tmpl-*.sql` +
+`_dataset.sql`. Editing the generated files by hand will be overwritten, and
+editing only one of them would make the dry run lie about what the apply does.
 
 ## Guarantees (all exercised against a real Postgres 16 with this repo's `schema.sql`)
 
@@ -43,6 +52,11 @@ never disagree. **If you edit a person, edit them in `02` and `03` both.**
 - Merges never delete. The duplicate row survives as `closed_lost` carrying a
   "Merged into X" note; the secondary email is written into the main row's notes.
 - The "AK" and ~$20K / ~$11K-per-month rows are **flagged only, never written**.
+- Partial payments are real data: `amount_paid` and `balance_due` are JSONB
+  numbers, `next_payment_due` a `'YYYY-MM-DD'` string. The app reads them via
+  `src/lib/payments.ts`, shared by the roster and the detail page.
+- The client detail page's autosave spreads existing metadata, so editing a
+  client there cannot wipe the payment fields.
 
 ## Stage → status values (from `src/components/Pipeline.tsx:35`)
 

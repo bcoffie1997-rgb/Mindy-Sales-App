@@ -49,12 +49,37 @@ SELECT
 FROM leads l
 WHERE l.type <> 'client';
 
+-- B2. Outstanding consulting balances — the money still owed.
+SELECT
+  l.name,
+  (l.metadata->>'amount_paid')::numeric                     AS amount_paid,
+  (l.metadata->>'balance_due')::numeric                     AS balance_due,
+  l.metadata->>'next_payment_due'                           AS next_payment_due,
+  CASE WHEN COALESCE((l.metadata->>'balance_due')::numeric, 0) > 0
+            AND (l.metadata->>'next_payment_due') IS NOT NULL
+            AND (l.metadata->>'next_payment_due')::date < current_date
+       THEN 'OVERDUE' ELSE '' END                           AS flag
+FROM leads l
+WHERE COALESCE((l.metadata->>'balance_due')::numeric, 0) > 0
+ORDER BY (l.metadata->>'next_payment_due')::date NULLS LAST;
+
+-- B3. Collected vs outstanding across every Won consulting client.
+SELECT
+  SUM((l.metadata->>'amount_paid')::numeric)                AS total_collected,
+  SUM((l.metadata->>'balance_due')::numeric)                AS total_outstanding,
+  count(*) FILTER (WHERE COALESCE((l.metadata->>'balance_due')::numeric,0) > 0) AS clients_owing
+FROM leads l
+WHERE l.metadata ? 'amount_paid';
+
 -- C. The BD / Consulting roster (what /api/managed-clients returns).
 SELECT l.id, l.name, l.company, l.status,
        l.metadata->>'sessions_total'                       AS sessions_total,
        jsonb_array_length(COALESCE(l.metadata->'sessions', '[]'::jsonb)) AS sessions_rows,
        (SELECT count(*) FROM jsonb_array_elements(COALESCE(l.metadata->'sessions','[]'::jsonb)) s
-         WHERE (s->>'done')::boolean)                      AS sessions_done
+         WHERE (s->>'done')::boolean)                      AS sessions_done,
+       l.metadata->>'amount_paid'                          AS amount_paid,
+       l.metadata->>'balance_due'                          AS balance_due,
+       l.metadata->>'next_payment_due'                     AS next_payment_due
 FROM leads l
 WHERE (l.metadata->>'managed')::boolean IS TRUE
 ORDER BY l.name;

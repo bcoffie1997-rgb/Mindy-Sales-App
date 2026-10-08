@@ -20,68 +20,72 @@ BEGIN;
 -- ─────────────────────── 1. UPDATE the rows that already exist ───────────────────────
 WITH
 incoming (ref, full_name, alt_name, company, email, new_status, opp_value, clear_opp_value,
-          set_managed, sessions_total, all_sessions_done, set_date, fallback_date, note) AS (
+          set_managed, sessions_total, all_sessions_done,
+          amount_paid, balance_due, next_payment_due, set_date, fallback_date, note) AS (
   VALUES
   -- ─────────────── WON — paid consulting, also pushed to BD / Consulting ───────────────
+  -- amount_paid / balance_due / next_payment_due are written as real numbers and a
+  -- real date in metadata, so the app can show and total them. The second $3K
+  -- installment is due within 60 days of the first payment.
   -- set_date      = always write this last_action_date (the real payment date)
   -- fallback_date = only write it if the row has no last_action_date yet
-  ( 1, 'Delmar Bennett',       NULL::text,  'Revo Construction',          'delmarbennett@revoconstruction.com', 'closed_won',    6000::numeric, false, true,  12::int, false, '2026-10-01'::date, NULL::date,
-    'Paid 90-Day Accelerator Oct 1. Mindy onboarding done Oct 6. 1st consulting call w/ Eric Oct 9.'),
-  ( 2, 'Tim Dieschbourg',      NULL,        'Task Construction Group',    'tim@taskcg.com',                     'closed_won',    6000,          false, true,  12,      false, '2026-09-22',       NULL,
-    'Payment confirmed. Engagement letter Sep 3, onboarded Oct 7.'),
-  ( 3, 'Kamesha',              'Camiesha',  'EAI Industries LLC',         'cameisha2005@gmail.com',             'closed_won',    6000,          false, true,  12,      true,  NULL,               '2026-09-01',
-    'Name also spelled Camiesha. 12 of 12 sessions used - now billed hourly.'),
-  ( 4, 'Amir',                 NULL,        NULL,                         'amirj70@gmail.com',                  'closed_won',    6000,          false, true,  12,      false, NULL,               '2026-09-01',
+  ( 1, 'Delmar Bennett',       NULL::text,  'Revo Construction',          'delmarbennett@revoconstruction.com', 'closed_won',    6000::numeric, false, true,  12::int, false, 3000::numeric, 3000::numeric, '2026-11-30'::date, '2026-10-01'::date, NULL::date,
+    'Paid $3K of $6K, first installment Oct 1. Balance $3K due by Nov 30. Mindy onboarding done Oct 6. 1st consulting call w/ Eric Oct 9.'),
+  ( 2, 'Tim Dieschbourg',      NULL,        'Task Construction Group',    'tim@taskcg.com',                     'closed_won',    6000,          false, true,  12,      false, 6000,          0,             NULL,               '2026-09-22',       NULL,
+    'Payment confirmed, $6K paid in full. Engagement letter Sep 3, onboarded Oct 7.'),
+  ( 3, 'Kamesha',              'Camiesha',  'EAI Industries LLC',         'cameisha2005@gmail.com',             'closed_won',    6000,          false, true,  12,      true,  6000,          0,             NULL,               NULL,               '2026-09-01',
+    'Name also spelled Camiesha. $6K paid in full. 12 of 12 sessions used - now billed hourly.'),
+  ( 4, 'Amir',                 NULL,        NULL,                         'amirj70@gmail.com',                  'closed_won',    6000,          false, true,  12,      false, 6000,          0,             NULL,               NULL,               '2026-09-01',
     'Paid full $6,000 for consulting.'),
-  ( 5, 'Vance Hodge',          NULL,        NULL,                         'veman232@sbcglobal.net',             'closed_won',    6000,          false, true,  12,      false, '2026-06-15',       NULL,
-    'Paid $3K of $6K. Balance $3K outstanding. Missed some sessions per Sep 11 sales meeting.'),
+  ( 5, 'Vance Hodge',          NULL,        NULL,                         'veman232@sbcglobal.net',             'closed_won',    6000,          false, true,  12,      false, 3000,          3000,          '2026-08-14',       '2026-06-15',       NULL,
+    'Paid $3K of $6K, first installment Jun 15. Balance $3K is OVERDUE - was due Aug 14. Missed some sessions per Sep 11 sales meeting.'),
 
   -- ─────────────── PROPOSAL SENT ───────────────
-  ( 6, 'Ravi Ram',             NULL,        'Dhali',                      'ravi@dhali.com',                     'proposal_sent', 6000,          false, false, NULL,    false, NULL,               NULL,
+  ( 6, 'Ravi Ram',             NULL,        'Dhali',                      'ravi@dhali.com',                     'proposal_sent', 6000,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Agreement sent Oct 6 via BreezeDoc. Ravi cancelled Oct 8 call, will reschedule next week. Secondary email: liia@dhali.com (payments) - merged in, duplicate row closed.'),
-  ( 7, 'Joseph Boyd',          NULL,        'Building Consultants Inc',   'jboyd@buildingconsultantsinc.com',   'proposal_sent', 6000,          false, false, NULL,    false, NULL,               NULL,
+  ( 7, 'Joseph Boyd',          NULL,        'Building Consultants Inc',   'jboyd@buildingconsultantsinc.com',   'proposal_sent', 6000,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Committed $6K to Eric Sep 24; agreement sent. Bought Mindy only Oct 5. Consulting still unpaid. Secondary email: fisherboyd@gmail.com - merged in, duplicate row closed.'),
-  ( 8, 'Jermaine Isaac',       'Jay Isaac', 'LaTronic Solutions',         'jayisaac@latronicsolutions.com',     'proposal_sent', 6000,          false, false, NULL,    false, NULL,               NULL,
+  ( 8, 'Jermaine Isaac',       'Jay Isaac', 'LaTronic Solutions',         'jayisaac@latronicsolutions.com',     'proposal_sent', 6000,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     '$6K 90-Day Accelerator. TO CONFIRM: was the engagement letter actually sent?'),
-  ( 9, 'Juawan Marsh',         NULL,        'J.D. Marsh Contracting',     'juawandmarsh34@gmail.com',           'proposal_sent', 6000,          false, false, NULL,    false, NULL,               NULL,
+  ( 9, 'Juawan Marsh',         NULL,        'J.D. Marsh Contracting',     'juawandmarsh34@gmail.com',           'proposal_sent', 6000,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Needs $3K down; on hold until back pay arrives. Followed up Oct 1.'),
-  (10, 'Denton Douglas',       NULL,        'Monarch Yachts',             'denton@monarchyachts.com',           'proposal_sent', NULL,          false, false, NULL,    false, NULL,               NULL,
+  (10, 'Denton Douglas',       NULL,        'Monarch Yachts',             'denton@monarchyachts.com',           'proposal_sent', NULL,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Proposal + Wave invoice sent Sep 21, followed up Sep 23. Deal value intentionally left blank.'),
-  (11, 'Latwan Wolfe',         NULL,        NULL,                         'latwanw@gmail.com',                  'proposal_sent', 6000,          false, false, NULL,    false, NULL,               NULL,
+  (11, 'Latwan Wolfe',         NULL,        NULL,                         'latwanw@gmail.com',                  'proposal_sent', 6000,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     '$6K offered Oct 5, Accelerator PDF sent. Wants a follow-up call with his fiancee.'),
 
   -- ─────────────── CALL DONE — $6K offered, follow-up needed ───────────────
-  (12, 'Joe Cary',             NULL,        'After Valor Services',       'joe@aftervalorservices.com',         'call_completed', 6000,         false, false, NULL,    false, NULL,               NULL,
+  (12, 'Joe Cary',             NULL,        'After Valor Services',       'joe@aftervalorservices.com',         'call_completed', 6000,         false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Offered 2x$3K Oct 1. Branden finding a medical-products consultant. Secondary email: craig@suaspontedev.com (partner Craig Belluche, bought Mindy Oct 6) - merged in, duplicate row closed. SAME deal, do not double count.'),
-  (13, 'Michael L',            NULL,        'cbaytech',                   'michael@cbaytech.com',               'call_completed', 6000,         false, false, NULL,    false, NULL,               NULL,
+  (13, 'Michael L',            NULL,        'cbaytech',                   'michael@cbaytech.com',               'call_completed', 6000,         false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'IT SDVOSB. Call Sep 24. No follow-up yet.'),
-  (14, 'Kemi Alli',            NULL,        NULL,                         'kemi.alli@gmail.com',                'call_completed', 6000,         false, false, NULL,    false, NULL,               NULL,
+  (14, 'Kemi Alli',            NULL,        NULL,                         'kemi.alli@gmail.com',                'call_completed', 6000,         false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Offered Sep 30. Bought Mindy Sep 28.'),
-  (15, 'Dr. Angela Marshall',  'Angela Marshall', 'MBD Tech',             'drmarshall@mdforwomen.com',          'call_completed', 6000,         false, false, NULL,    false, NULL,               NULL,
+  (15, 'Dr. Angela Marshall',  'Angela Marshall', 'MBD Tech',             'drmarshall@mdforwomen.com',          'call_completed', 6000,         false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Offered Sep 30, reports sent. Joint deal with Dr. BJ Brown (CCCC) - value carried on this row only.'),
-  (16, 'Dr. BJ Brown',         'BJ Brown',  'CCCC',                       'dr.bjbrown@ccccmentalhealth.com',    'call_completed', NULL,         false, false, NULL,    false, NULL,               NULL,
+  (16, 'Dr. BJ Brown',         'BJ Brown',  'CCCC',                       'dr.bjbrown@ccccmentalhealth.com',    'call_completed', NULL,         false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Offered Sep 30, reports sent. Joint deal with Dr. Angela Marshall (MBD Tech) - value carried on her row to avoid double counting.'),
-  (17, 'Kyzito Ukah',          NULL,        NULL,                         'juemservices@gmail.com',             'call_completed', 6000,         false, false, NULL,    false, NULL,               NULL,
+  (17, 'Kyzito Ukah',          NULL,        NULL,                         'juemservices@gmail.com',             'call_completed', 6000,         false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Offered Sep 18.'),
-  (18, 'Simon Kong',           NULL,        'Jemma Tech',                 'skong@jemma.tech',                   'call_completed', 6000,         false, false, NULL,    false, NULL,               NULL,
+  (18, 'Simon Kong',           NULL,        'Jemma Tech',                 'skong@jemma.tech',                   'call_completed', 6000,         false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Call Sep 17, engagement offer pending.'),
-  (19, 'Erick El',             'Erick Ellis','Sille Consulting Services', 'edellis@silleconsultingservices.com','call_completed', 6000,         false, false, NULL,    false, NULL,               NULL,
+  (19, 'Erick El',             'Erick Ellis','Sille Consulting Services', 'edellis@silleconsultingservices.com','call_completed', 6000,         false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Call Sep 25, waiting on his capability statement.'),
 
   -- ─────────────── CALL BOOKED — no deal value set (none quoted yet) ───────────────
-  (20, 'Troy',                 NULL,        NULL,                         'troym1217@yahoo.com',                'booked',        NULL,          false, false, NULL,    false, NULL,               NULL,
+  (20, 'Troy',                 NULL,        NULL,                         'troym1217@yahoo.com',                'booked',        NULL,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Call booked Oct 8.'),
-  (21, 'Brian Murphy',         NULL,        'Vertek Staffing',            'bmurphy@vertekstaffing.com',         'booked',        NULL,          false, false, NULL,    false, NULL,               NULL,
+  (21, 'Brian Murphy',         NULL,        'Vertek Staffing',            'bmurphy@vertekstaffing.com',         'booked',        NULL,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Call booked Oct 9 with Eric.'),
-  (22, 'Terry Douglas',        NULL,        NULL,                         'terrydouglas828@gmail.com',          'booked',        NULL,          false, false, NULL,    false, NULL,               NULL,
+  (22, 'Terry Douglas',        NULL,        NULL,                         'terrydouglas828@gmail.com',          'booked',        NULL,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Call booked Oct 13.'),
-  (23, 'Cody Ronk',            NULL,        NULL,                         'codyronk1@gmail.com',                'booked',        NULL,          false, false, NULL,    false, NULL,               NULL,
+  (23, 'Cody Ronk',            NULL,        NULL,                         'codyronk1@gmail.com',                'booked',        NULL,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Call booked Oct 16.'),
-  (24, 'Ilan Lambert',         NULL,        'boost33',                    'ilan@boost33.com',                   'booked',        NULL,          false, false, NULL,    false, NULL,               NULL,
+  (24, 'Ilan Lambert',         NULL,        'boost33',                    'ilan@boost33.com',                   'booked',        NULL,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Call booked Oct 21.'),
 
   -- ─────────────── LOST ───────────────
-  (25, 'James Roberts',        NULL,        NULL,                         'jroberts@vfmdllc.com',               'closed_lost',   NULL,          true,  false, NULL,    false, NULL,               NULL,
+  (25, 'James Roberts',        NULL,        NULL,                         'jroberts@vfmdllc.com',               'closed_lost',   NULL,          true,  false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Wanted a revenue share arrangement, not consulting. Deal value cleared.')
 ),
 
@@ -170,6 +174,13 @@ SET
               THEN jsonb_build_object('managed', true) ELSE '{}'::jsonb END
       || CASE WHEN u.sessions_total IS NOT NULL
               THEN jsonb_build_object('sessions_total', u.sessions_total) ELSE '{}'::jsonb END
+      || CASE WHEN u.amount_paid IS NOT NULL
+              THEN jsonb_build_object('amount_paid', u.amount_paid) ELSE '{}'::jsonb END
+      || CASE WHEN u.balance_due IS NOT NULL
+              THEN jsonb_build_object('balance_due', u.balance_due) ELSE '{}'::jsonb END
+      || CASE WHEN u.next_payment_due IS NOT NULL
+              THEN jsonb_build_object('next_payment_due', to_char(u.next_payment_due, 'YYYY-MM-DD'))
+              ELSE '{}'::jsonb END
       || CASE WHEN u.all_sessions_done
               THEN jsonb_build_object('sessions', (
                      SELECT jsonb_agg(
@@ -185,68 +196,72 @@ WHERE l.id = u.target_id;
 -- ─────────────────────── 2. INSERT the people with no row yet ───────────────────────
 WITH
 incoming (ref, full_name, alt_name, company, email, new_status, opp_value, clear_opp_value,
-          set_managed, sessions_total, all_sessions_done, set_date, fallback_date, note) AS (
+          set_managed, sessions_total, all_sessions_done,
+          amount_paid, balance_due, next_payment_due, set_date, fallback_date, note) AS (
   VALUES
   -- ─────────────── WON — paid consulting, also pushed to BD / Consulting ───────────────
+  -- amount_paid / balance_due / next_payment_due are written as real numbers and a
+  -- real date in metadata, so the app can show and total them. The second $3K
+  -- installment is due within 60 days of the first payment.
   -- set_date      = always write this last_action_date (the real payment date)
   -- fallback_date = only write it if the row has no last_action_date yet
-  ( 1, 'Delmar Bennett',       NULL::text,  'Revo Construction',          'delmarbennett@revoconstruction.com', 'closed_won',    6000::numeric, false, true,  12::int, false, '2026-10-01'::date, NULL::date,
-    'Paid 90-Day Accelerator Oct 1. Mindy onboarding done Oct 6. 1st consulting call w/ Eric Oct 9.'),
-  ( 2, 'Tim Dieschbourg',      NULL,        'Task Construction Group',    'tim@taskcg.com',                     'closed_won',    6000,          false, true,  12,      false, '2026-09-22',       NULL,
-    'Payment confirmed. Engagement letter Sep 3, onboarded Oct 7.'),
-  ( 3, 'Kamesha',              'Camiesha',  'EAI Industries LLC',         'cameisha2005@gmail.com',             'closed_won',    6000,          false, true,  12,      true,  NULL,               '2026-09-01',
-    'Name also spelled Camiesha. 12 of 12 sessions used - now billed hourly.'),
-  ( 4, 'Amir',                 NULL,        NULL,                         'amirj70@gmail.com',                  'closed_won',    6000,          false, true,  12,      false, NULL,               '2026-09-01',
+  ( 1, 'Delmar Bennett',       NULL::text,  'Revo Construction',          'delmarbennett@revoconstruction.com', 'closed_won',    6000::numeric, false, true,  12::int, false, 3000::numeric, 3000::numeric, '2026-11-30'::date, '2026-10-01'::date, NULL::date,
+    'Paid $3K of $6K, first installment Oct 1. Balance $3K due by Nov 30. Mindy onboarding done Oct 6. 1st consulting call w/ Eric Oct 9.'),
+  ( 2, 'Tim Dieschbourg',      NULL,        'Task Construction Group',    'tim@taskcg.com',                     'closed_won',    6000,          false, true,  12,      false, 6000,          0,             NULL,               '2026-09-22',       NULL,
+    'Payment confirmed, $6K paid in full. Engagement letter Sep 3, onboarded Oct 7.'),
+  ( 3, 'Kamesha',              'Camiesha',  'EAI Industries LLC',         'cameisha2005@gmail.com',             'closed_won',    6000,          false, true,  12,      true,  6000,          0,             NULL,               NULL,               '2026-09-01',
+    'Name also spelled Camiesha. $6K paid in full. 12 of 12 sessions used - now billed hourly.'),
+  ( 4, 'Amir',                 NULL,        NULL,                         'amirj70@gmail.com',                  'closed_won',    6000,          false, true,  12,      false, 6000,          0,             NULL,               NULL,               '2026-09-01',
     'Paid full $6,000 for consulting.'),
-  ( 5, 'Vance Hodge',          NULL,        NULL,                         'veman232@sbcglobal.net',             'closed_won',    6000,          false, true,  12,      false, '2026-06-15',       NULL,
-    'Paid $3K of $6K. Balance $3K outstanding. Missed some sessions per Sep 11 sales meeting.'),
+  ( 5, 'Vance Hodge',          NULL,        NULL,                         'veman232@sbcglobal.net',             'closed_won',    6000,          false, true,  12,      false, 3000,          3000,          '2026-08-14',       '2026-06-15',       NULL,
+    'Paid $3K of $6K, first installment Jun 15. Balance $3K is OVERDUE - was due Aug 14. Missed some sessions per Sep 11 sales meeting.'),
 
   -- ─────────────── PROPOSAL SENT ───────────────
-  ( 6, 'Ravi Ram',             NULL,        'Dhali',                      'ravi@dhali.com',                     'proposal_sent', 6000,          false, false, NULL,    false, NULL,               NULL,
+  ( 6, 'Ravi Ram',             NULL,        'Dhali',                      'ravi@dhali.com',                     'proposal_sent', 6000,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Agreement sent Oct 6 via BreezeDoc. Ravi cancelled Oct 8 call, will reschedule next week. Secondary email: liia@dhali.com (payments) - merged in, duplicate row closed.'),
-  ( 7, 'Joseph Boyd',          NULL,        'Building Consultants Inc',   'jboyd@buildingconsultantsinc.com',   'proposal_sent', 6000,          false, false, NULL,    false, NULL,               NULL,
+  ( 7, 'Joseph Boyd',          NULL,        'Building Consultants Inc',   'jboyd@buildingconsultantsinc.com',   'proposal_sent', 6000,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Committed $6K to Eric Sep 24; agreement sent. Bought Mindy only Oct 5. Consulting still unpaid. Secondary email: fisherboyd@gmail.com - merged in, duplicate row closed.'),
-  ( 8, 'Jermaine Isaac',       'Jay Isaac', 'LaTronic Solutions',         'jayisaac@latronicsolutions.com',     'proposal_sent', 6000,          false, false, NULL,    false, NULL,               NULL,
+  ( 8, 'Jermaine Isaac',       'Jay Isaac', 'LaTronic Solutions',         'jayisaac@latronicsolutions.com',     'proposal_sent', 6000,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     '$6K 90-Day Accelerator. TO CONFIRM: was the engagement letter actually sent?'),
-  ( 9, 'Juawan Marsh',         NULL,        'J.D. Marsh Contracting',     'juawandmarsh34@gmail.com',           'proposal_sent', 6000,          false, false, NULL,    false, NULL,               NULL,
+  ( 9, 'Juawan Marsh',         NULL,        'J.D. Marsh Contracting',     'juawandmarsh34@gmail.com',           'proposal_sent', 6000,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Needs $3K down; on hold until back pay arrives. Followed up Oct 1.'),
-  (10, 'Denton Douglas',       NULL,        'Monarch Yachts',             'denton@monarchyachts.com',           'proposal_sent', NULL,          false, false, NULL,    false, NULL,               NULL,
+  (10, 'Denton Douglas',       NULL,        'Monarch Yachts',             'denton@monarchyachts.com',           'proposal_sent', NULL,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Proposal + Wave invoice sent Sep 21, followed up Sep 23. Deal value intentionally left blank.'),
-  (11, 'Latwan Wolfe',         NULL,        NULL,                         'latwanw@gmail.com',                  'proposal_sent', 6000,          false, false, NULL,    false, NULL,               NULL,
+  (11, 'Latwan Wolfe',         NULL,        NULL,                         'latwanw@gmail.com',                  'proposal_sent', 6000,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     '$6K offered Oct 5, Accelerator PDF sent. Wants a follow-up call with his fiancee.'),
 
   -- ─────────────── CALL DONE — $6K offered, follow-up needed ───────────────
-  (12, 'Joe Cary',             NULL,        'After Valor Services',       'joe@aftervalorservices.com',         'call_completed', 6000,         false, false, NULL,    false, NULL,               NULL,
+  (12, 'Joe Cary',             NULL,        'After Valor Services',       'joe@aftervalorservices.com',         'call_completed', 6000,         false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Offered 2x$3K Oct 1. Branden finding a medical-products consultant. Secondary email: craig@suaspontedev.com (partner Craig Belluche, bought Mindy Oct 6) - merged in, duplicate row closed. SAME deal, do not double count.'),
-  (13, 'Michael L',            NULL,        'cbaytech',                   'michael@cbaytech.com',               'call_completed', 6000,         false, false, NULL,    false, NULL,               NULL,
+  (13, 'Michael L',            NULL,        'cbaytech',                   'michael@cbaytech.com',               'call_completed', 6000,         false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'IT SDVOSB. Call Sep 24. No follow-up yet.'),
-  (14, 'Kemi Alli',            NULL,        NULL,                         'kemi.alli@gmail.com',                'call_completed', 6000,         false, false, NULL,    false, NULL,               NULL,
+  (14, 'Kemi Alli',            NULL,        NULL,                         'kemi.alli@gmail.com',                'call_completed', 6000,         false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Offered Sep 30. Bought Mindy Sep 28.'),
-  (15, 'Dr. Angela Marshall',  'Angela Marshall', 'MBD Tech',             'drmarshall@mdforwomen.com',          'call_completed', 6000,         false, false, NULL,    false, NULL,               NULL,
+  (15, 'Dr. Angela Marshall',  'Angela Marshall', 'MBD Tech',             'drmarshall@mdforwomen.com',          'call_completed', 6000,         false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Offered Sep 30, reports sent. Joint deal with Dr. BJ Brown (CCCC) - value carried on this row only.'),
-  (16, 'Dr. BJ Brown',         'BJ Brown',  'CCCC',                       'dr.bjbrown@ccccmentalhealth.com',    'call_completed', NULL,         false, false, NULL,    false, NULL,               NULL,
+  (16, 'Dr. BJ Brown',         'BJ Brown',  'CCCC',                       'dr.bjbrown@ccccmentalhealth.com',    'call_completed', NULL,         false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Offered Sep 30, reports sent. Joint deal with Dr. Angela Marshall (MBD Tech) - value carried on her row to avoid double counting.'),
-  (17, 'Kyzito Ukah',          NULL,        NULL,                         'juemservices@gmail.com',             'call_completed', 6000,         false, false, NULL,    false, NULL,               NULL,
+  (17, 'Kyzito Ukah',          NULL,        NULL,                         'juemservices@gmail.com',             'call_completed', 6000,         false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Offered Sep 18.'),
-  (18, 'Simon Kong',           NULL,        'Jemma Tech',                 'skong@jemma.tech',                   'call_completed', 6000,         false, false, NULL,    false, NULL,               NULL,
+  (18, 'Simon Kong',           NULL,        'Jemma Tech',                 'skong@jemma.tech',                   'call_completed', 6000,         false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Call Sep 17, engagement offer pending.'),
-  (19, 'Erick El',             'Erick Ellis','Sille Consulting Services', 'edellis@silleconsultingservices.com','call_completed', 6000,         false, false, NULL,    false, NULL,               NULL,
+  (19, 'Erick El',             'Erick Ellis','Sille Consulting Services', 'edellis@silleconsultingservices.com','call_completed', 6000,         false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Call Sep 25, waiting on his capability statement.'),
 
   -- ─────────────── CALL BOOKED — no deal value set (none quoted yet) ───────────────
-  (20, 'Troy',                 NULL,        NULL,                         'troym1217@yahoo.com',                'booked',        NULL,          false, false, NULL,    false, NULL,               NULL,
+  (20, 'Troy',                 NULL,        NULL,                         'troym1217@yahoo.com',                'booked',        NULL,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Call booked Oct 8.'),
-  (21, 'Brian Murphy',         NULL,        'Vertek Staffing',            'bmurphy@vertekstaffing.com',         'booked',        NULL,          false, false, NULL,    false, NULL,               NULL,
+  (21, 'Brian Murphy',         NULL,        'Vertek Staffing',            'bmurphy@vertekstaffing.com',         'booked',        NULL,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Call booked Oct 9 with Eric.'),
-  (22, 'Terry Douglas',        NULL,        NULL,                         'terrydouglas828@gmail.com',          'booked',        NULL,          false, false, NULL,    false, NULL,               NULL,
+  (22, 'Terry Douglas',        NULL,        NULL,                         'terrydouglas828@gmail.com',          'booked',        NULL,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Call booked Oct 13.'),
-  (23, 'Cody Ronk',            NULL,        NULL,                         'codyronk1@gmail.com',                'booked',        NULL,          false, false, NULL,    false, NULL,               NULL,
+  (23, 'Cody Ronk',            NULL,        NULL,                         'codyronk1@gmail.com',                'booked',        NULL,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Call booked Oct 16.'),
-  (24, 'Ilan Lambert',         NULL,        'boost33',                    'ilan@boost33.com',                   'booked',        NULL,          false, false, NULL,    false, NULL,               NULL,
+  (24, 'Ilan Lambert',         NULL,        'boost33',                    'ilan@boost33.com',                   'booked',        NULL,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Call booked Oct 21.'),
 
   -- ─────────────── LOST ───────────────
-  (25, 'James Roberts',        NULL,        NULL,                         'jroberts@vfmdllc.com',               'closed_lost',   NULL,          true,  false, NULL,    false, NULL,               NULL,
+  (25, 'James Roberts',        NULL,        NULL,                         'jroberts@vfmdllc.com',               'closed_lost',   NULL,          true,  false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Wanted a revenue share arrangement, not consulting. Deal value cleared.')
 ),
 
@@ -324,6 +339,13 @@ SELECT
               THEN jsonb_build_object('managed', true) ELSE '{}'::jsonb END
       || CASE WHEN n.sessions_total IS NOT NULL
               THEN jsonb_build_object('sessions_total', n.sessions_total) ELSE '{}'::jsonb END
+      || CASE WHEN n.amount_paid IS NOT NULL
+              THEN jsonb_build_object('amount_paid', n.amount_paid) ELSE '{}'::jsonb END
+      || CASE WHEN n.balance_due IS NOT NULL
+              THEN jsonb_build_object('balance_due', n.balance_due) ELSE '{}'::jsonb END
+      || CASE WHEN n.next_payment_due IS NOT NULL
+              THEN jsonb_build_object('next_payment_due', to_char(n.next_payment_due, 'YYYY-MM-DD'))
+              ELSE '{}'::jsonb END
       || CASE WHEN n.all_sessions_done
               THEN jsonb_build_object('sessions', (
                      SELECT jsonb_agg(
@@ -341,68 +363,72 @@ ON CONFLICT (id) DO NOTHING;
 -- The surviving contact already carries the secondary email in its notes.
 WITH
 incoming (ref, full_name, alt_name, company, email, new_status, opp_value, clear_opp_value,
-          set_managed, sessions_total, all_sessions_done, set_date, fallback_date, note) AS (
+          set_managed, sessions_total, all_sessions_done,
+          amount_paid, balance_due, next_payment_due, set_date, fallback_date, note) AS (
   VALUES
   -- ─────────────── WON — paid consulting, also pushed to BD / Consulting ───────────────
+  -- amount_paid / balance_due / next_payment_due are written as real numbers and a
+  -- real date in metadata, so the app can show and total them. The second $3K
+  -- installment is due within 60 days of the first payment.
   -- set_date      = always write this last_action_date (the real payment date)
   -- fallback_date = only write it if the row has no last_action_date yet
-  ( 1, 'Delmar Bennett',       NULL::text,  'Revo Construction',          'delmarbennett@revoconstruction.com', 'closed_won',    6000::numeric, false, true,  12::int, false, '2026-10-01'::date, NULL::date,
-    'Paid 90-Day Accelerator Oct 1. Mindy onboarding done Oct 6. 1st consulting call w/ Eric Oct 9.'),
-  ( 2, 'Tim Dieschbourg',      NULL,        'Task Construction Group',    'tim@taskcg.com',                     'closed_won',    6000,          false, true,  12,      false, '2026-09-22',       NULL,
-    'Payment confirmed. Engagement letter Sep 3, onboarded Oct 7.'),
-  ( 3, 'Kamesha',              'Camiesha',  'EAI Industries LLC',         'cameisha2005@gmail.com',             'closed_won',    6000,          false, true,  12,      true,  NULL,               '2026-09-01',
-    'Name also spelled Camiesha. 12 of 12 sessions used - now billed hourly.'),
-  ( 4, 'Amir',                 NULL,        NULL,                         'amirj70@gmail.com',                  'closed_won',    6000,          false, true,  12,      false, NULL,               '2026-09-01',
+  ( 1, 'Delmar Bennett',       NULL::text,  'Revo Construction',          'delmarbennett@revoconstruction.com', 'closed_won',    6000::numeric, false, true,  12::int, false, 3000::numeric, 3000::numeric, '2026-11-30'::date, '2026-10-01'::date, NULL::date,
+    'Paid $3K of $6K, first installment Oct 1. Balance $3K due by Nov 30. Mindy onboarding done Oct 6. 1st consulting call w/ Eric Oct 9.'),
+  ( 2, 'Tim Dieschbourg',      NULL,        'Task Construction Group',    'tim@taskcg.com',                     'closed_won',    6000,          false, true,  12,      false, 6000,          0,             NULL,               '2026-09-22',       NULL,
+    'Payment confirmed, $6K paid in full. Engagement letter Sep 3, onboarded Oct 7.'),
+  ( 3, 'Kamesha',              'Camiesha',  'EAI Industries LLC',         'cameisha2005@gmail.com',             'closed_won',    6000,          false, true,  12,      true,  6000,          0,             NULL,               NULL,               '2026-09-01',
+    'Name also spelled Camiesha. $6K paid in full. 12 of 12 sessions used - now billed hourly.'),
+  ( 4, 'Amir',                 NULL,        NULL,                         'amirj70@gmail.com',                  'closed_won',    6000,          false, true,  12,      false, 6000,          0,             NULL,               NULL,               '2026-09-01',
     'Paid full $6,000 for consulting.'),
-  ( 5, 'Vance Hodge',          NULL,        NULL,                         'veman232@sbcglobal.net',             'closed_won',    6000,          false, true,  12,      false, '2026-06-15',       NULL,
-    'Paid $3K of $6K. Balance $3K outstanding. Missed some sessions per Sep 11 sales meeting.'),
+  ( 5, 'Vance Hodge',          NULL,        NULL,                         'veman232@sbcglobal.net',             'closed_won',    6000,          false, true,  12,      false, 3000,          3000,          '2026-08-14',       '2026-06-15',       NULL,
+    'Paid $3K of $6K, first installment Jun 15. Balance $3K is OVERDUE - was due Aug 14. Missed some sessions per Sep 11 sales meeting.'),
 
   -- ─────────────── PROPOSAL SENT ───────────────
-  ( 6, 'Ravi Ram',             NULL,        'Dhali',                      'ravi@dhali.com',                     'proposal_sent', 6000,          false, false, NULL,    false, NULL,               NULL,
+  ( 6, 'Ravi Ram',             NULL,        'Dhali',                      'ravi@dhali.com',                     'proposal_sent', 6000,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Agreement sent Oct 6 via BreezeDoc. Ravi cancelled Oct 8 call, will reschedule next week. Secondary email: liia@dhali.com (payments) - merged in, duplicate row closed.'),
-  ( 7, 'Joseph Boyd',          NULL,        'Building Consultants Inc',   'jboyd@buildingconsultantsinc.com',   'proposal_sent', 6000,          false, false, NULL,    false, NULL,               NULL,
+  ( 7, 'Joseph Boyd',          NULL,        'Building Consultants Inc',   'jboyd@buildingconsultantsinc.com',   'proposal_sent', 6000,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Committed $6K to Eric Sep 24; agreement sent. Bought Mindy only Oct 5. Consulting still unpaid. Secondary email: fisherboyd@gmail.com - merged in, duplicate row closed.'),
-  ( 8, 'Jermaine Isaac',       'Jay Isaac', 'LaTronic Solutions',         'jayisaac@latronicsolutions.com',     'proposal_sent', 6000,          false, false, NULL,    false, NULL,               NULL,
+  ( 8, 'Jermaine Isaac',       'Jay Isaac', 'LaTronic Solutions',         'jayisaac@latronicsolutions.com',     'proposal_sent', 6000,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     '$6K 90-Day Accelerator. TO CONFIRM: was the engagement letter actually sent?'),
-  ( 9, 'Juawan Marsh',         NULL,        'J.D. Marsh Contracting',     'juawandmarsh34@gmail.com',           'proposal_sent', 6000,          false, false, NULL,    false, NULL,               NULL,
+  ( 9, 'Juawan Marsh',         NULL,        'J.D. Marsh Contracting',     'juawandmarsh34@gmail.com',           'proposal_sent', 6000,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Needs $3K down; on hold until back pay arrives. Followed up Oct 1.'),
-  (10, 'Denton Douglas',       NULL,        'Monarch Yachts',             'denton@monarchyachts.com',           'proposal_sent', NULL,          false, false, NULL,    false, NULL,               NULL,
+  (10, 'Denton Douglas',       NULL,        'Monarch Yachts',             'denton@monarchyachts.com',           'proposal_sent', NULL,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Proposal + Wave invoice sent Sep 21, followed up Sep 23. Deal value intentionally left blank.'),
-  (11, 'Latwan Wolfe',         NULL,        NULL,                         'latwanw@gmail.com',                  'proposal_sent', 6000,          false, false, NULL,    false, NULL,               NULL,
+  (11, 'Latwan Wolfe',         NULL,        NULL,                         'latwanw@gmail.com',                  'proposal_sent', 6000,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     '$6K offered Oct 5, Accelerator PDF sent. Wants a follow-up call with his fiancee.'),
 
   -- ─────────────── CALL DONE — $6K offered, follow-up needed ───────────────
-  (12, 'Joe Cary',             NULL,        'After Valor Services',       'joe@aftervalorservices.com',         'call_completed', 6000,         false, false, NULL,    false, NULL,               NULL,
+  (12, 'Joe Cary',             NULL,        'After Valor Services',       'joe@aftervalorservices.com',         'call_completed', 6000,         false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Offered 2x$3K Oct 1. Branden finding a medical-products consultant. Secondary email: craig@suaspontedev.com (partner Craig Belluche, bought Mindy Oct 6) - merged in, duplicate row closed. SAME deal, do not double count.'),
-  (13, 'Michael L',            NULL,        'cbaytech',                   'michael@cbaytech.com',               'call_completed', 6000,         false, false, NULL,    false, NULL,               NULL,
+  (13, 'Michael L',            NULL,        'cbaytech',                   'michael@cbaytech.com',               'call_completed', 6000,         false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'IT SDVOSB. Call Sep 24. No follow-up yet.'),
-  (14, 'Kemi Alli',            NULL,        NULL,                         'kemi.alli@gmail.com',                'call_completed', 6000,         false, false, NULL,    false, NULL,               NULL,
+  (14, 'Kemi Alli',            NULL,        NULL,                         'kemi.alli@gmail.com',                'call_completed', 6000,         false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Offered Sep 30. Bought Mindy Sep 28.'),
-  (15, 'Dr. Angela Marshall',  'Angela Marshall', 'MBD Tech',             'drmarshall@mdforwomen.com',          'call_completed', 6000,         false, false, NULL,    false, NULL,               NULL,
+  (15, 'Dr. Angela Marshall',  'Angela Marshall', 'MBD Tech',             'drmarshall@mdforwomen.com',          'call_completed', 6000,         false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Offered Sep 30, reports sent. Joint deal with Dr. BJ Brown (CCCC) - value carried on this row only.'),
-  (16, 'Dr. BJ Brown',         'BJ Brown',  'CCCC',                       'dr.bjbrown@ccccmentalhealth.com',    'call_completed', NULL,         false, false, NULL,    false, NULL,               NULL,
+  (16, 'Dr. BJ Brown',         'BJ Brown',  'CCCC',                       'dr.bjbrown@ccccmentalhealth.com',    'call_completed', NULL,         false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Offered Sep 30, reports sent. Joint deal with Dr. Angela Marshall (MBD Tech) - value carried on her row to avoid double counting.'),
-  (17, 'Kyzito Ukah',          NULL,        NULL,                         'juemservices@gmail.com',             'call_completed', 6000,         false, false, NULL,    false, NULL,               NULL,
+  (17, 'Kyzito Ukah',          NULL,        NULL,                         'juemservices@gmail.com',             'call_completed', 6000,         false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Offered Sep 18.'),
-  (18, 'Simon Kong',           NULL,        'Jemma Tech',                 'skong@jemma.tech',                   'call_completed', 6000,         false, false, NULL,    false, NULL,               NULL,
+  (18, 'Simon Kong',           NULL,        'Jemma Tech',                 'skong@jemma.tech',                   'call_completed', 6000,         false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Call Sep 17, engagement offer pending.'),
-  (19, 'Erick El',             'Erick Ellis','Sille Consulting Services', 'edellis@silleconsultingservices.com','call_completed', 6000,         false, false, NULL,    false, NULL,               NULL,
+  (19, 'Erick El',             'Erick Ellis','Sille Consulting Services', 'edellis@silleconsultingservices.com','call_completed', 6000,         false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Call Sep 25, waiting on his capability statement.'),
 
   -- ─────────────── CALL BOOKED — no deal value set (none quoted yet) ───────────────
-  (20, 'Troy',                 NULL,        NULL,                         'troym1217@yahoo.com',                'booked',        NULL,          false, false, NULL,    false, NULL,               NULL,
+  (20, 'Troy',                 NULL,        NULL,                         'troym1217@yahoo.com',                'booked',        NULL,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Call booked Oct 8.'),
-  (21, 'Brian Murphy',         NULL,        'Vertek Staffing',            'bmurphy@vertekstaffing.com',         'booked',        NULL,          false, false, NULL,    false, NULL,               NULL,
+  (21, 'Brian Murphy',         NULL,        'Vertek Staffing',            'bmurphy@vertekstaffing.com',         'booked',        NULL,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Call booked Oct 9 with Eric.'),
-  (22, 'Terry Douglas',        NULL,        NULL,                         'terrydouglas828@gmail.com',          'booked',        NULL,          false, false, NULL,    false, NULL,               NULL,
+  (22, 'Terry Douglas',        NULL,        NULL,                         'terrydouglas828@gmail.com',          'booked',        NULL,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Call booked Oct 13.'),
-  (23, 'Cody Ronk',            NULL,        NULL,                         'codyronk1@gmail.com',                'booked',        NULL,          false, false, NULL,    false, NULL,               NULL,
+  (23, 'Cody Ronk',            NULL,        NULL,                         'codyronk1@gmail.com',                'booked',        NULL,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Call booked Oct 16.'),
-  (24, 'Ilan Lambert',         NULL,        'boost33',                    'ilan@boost33.com',                   'booked',        NULL,          false, false, NULL,    false, NULL,               NULL,
+  (24, 'Ilan Lambert',         NULL,        'boost33',                    'ilan@boost33.com',                   'booked',        NULL,          false, false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Call booked Oct 21.'),
 
   -- ─────────────── LOST ───────────────
-  (25, 'James Roberts',        NULL,        NULL,                         'jroberts@vfmdllc.com',               'closed_lost',   NULL,          true,  false, NULL,    false, NULL,               NULL,
+  (25, 'James Roberts',        NULL,        NULL,                         'jroberts@vfmdllc.com',               'closed_lost',   NULL,          true,  false, NULL,    false, NULL,          NULL,          NULL,               NULL,               NULL,
     'Wanted a revenue share arrangement, not consulting. Deal value cleared.')
 ),
 

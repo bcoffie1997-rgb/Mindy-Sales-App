@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Building2, Search, Phone } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { apiJSON, errorMessage } from '../lib/api'
+import { paymentStatus, paidOfLabel, balanceLabel } from '../lib/payments'
 
 interface Client {
   id: string; name: string; email: string; company: string
@@ -12,6 +13,9 @@ interface Client {
     deliverables?: any[]; tasks?: any[]
     call_log?: { id: string; date: string; topics: string }[]
     calls_per_month?: number | null
+    amount_paid?: number | null
+    balance_due?: number | null
+    next_payment_due?: string | null
   }
 }
 
@@ -146,6 +150,20 @@ export default function BDManagement() {
                       <span className="text-xs text-slate-400 flex items-center gap-1 flex-shrink-0" title={`${cs.total} calls logged total`}>
                         <Phone size={11} className="text-purple-400" />
                         {cs.perMonth != null ? `${cs.thisMonth}/${cs.perMonth} calls this mo` : `${cs.total} calls`}
+                      </span>
+                    )
+                  })()}
+                  {(() => {
+                    const pay = paymentStatus(client.metadata)
+                    if (!pay) return null
+                    return (
+                      <span className="flex items-center gap-2 flex-shrink-0">
+                        <span className="text-xs text-slate-400">{paidOfLabel(pay)}</span>
+                        {pay.balance > 0 && (
+                          <span className="badge-red" title={balanceLabel(pay)}>
+                            {balanceLabel(pay)}
+                          </span>
+                        )}
                       </span>
                     )
                   })()}
