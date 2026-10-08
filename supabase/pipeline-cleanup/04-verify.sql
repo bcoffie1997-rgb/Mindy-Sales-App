@@ -59,7 +59,7 @@ FROM leads l
 WHERE (l.metadata->>'managed')::boolean IS TRUE
 ORDER BY l.name;
 
--- D. Confirm the 24 rows landed as intended.
+-- D. Confirm the 25 contacts + 3 merged duplicates landed as intended.
 SELECT l.status, l.name, l.email, l.metadata->>'opp_value' AS opp_value,
        l.metadata->>'managed' AS managed, l.last_action_date::date
 FROM leads l
@@ -71,7 +71,10 @@ WHERE lower(btrim(l.email)) IN (
   'kemi.alli@gmail.com','drmarshall@mdforwomen.com','dr.bjbrown@ccccmentalhealth.com',
   'juemservices@gmail.com','skong@jemma.tech','edellis@silleconsultingservices.com',
   'troym1217@yahoo.com','bmurphy@vertekstaffing.com','terrydouglas828@gmail.com',
-  'codyronk1@gmail.com','ilan@boost33.com','jroberts@vfmdllc.com'
+  'codyronk1@gmail.com','ilan@boost33.com','jroberts@vfmdllc.com',
+  'veman232@sbcglobal.net',
+  -- the three merged-away duplicates, expected to read closed_lost
+  'fisherboyd@gmail.com','liia@dhali.com','craig@suaspontedev.com'
 )
 ORDER BY
   array_position(ARRAY['closed_won','proposal_sent','call_completed','booked','closed_lost'], l.status),

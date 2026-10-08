@@ -1,7 +1,7 @@
 -- ============================================================================
 -- Pipeline cleanup — 2026-10-08 — SHARED DATASET (reference copy)
 -- ============================================================================
--- This is the single source of truth for the 23 people being updated.
+-- Single source of truth: 25 contacts + 3 duplicate rows to merge away.
 -- It is INLINED verbatim into 02-dry-run.sql and 03-apply.sql so the dry run
 -- and the apply can never drift apart. If you edit a row here, edit it in
 -- both of those files too (or just re-run the generator in this folder's
@@ -15,10 +15,17 @@
 --   email               primary match key (case-insensitive)
 --   new_status          the exact `status` value the Pipeline STAGES array writes
 --   opp_value           metadata.opp_value; NULL = leave the key alone entirely
+--   clear_opp_value     true = DELETE the opp_value key (used for Lost deals)
 --   set_managed         metadata.managed = true  (shows row in BD / Consulting)
 --   sessions_total      metadata.sessions_total
 --   all_sessions_done   build a 12-element metadata.sessions array, all done
+--   set_date            always write this last_action_date (real payment date)
+--   fallback_date       write it ONLY if the row has no last_action_date yet
 --   note                appended to notes, never overwrites
+--
+-- A second VALUES block, `merges`, closes out duplicate rows. The surviving
+-- contact carries the secondary email in its notes; the duplicate row is moved
+-- to closed_lost with a "Merged into X" note. Nothing is ever deleted.
 -- ============================================================================
 
 -- status values confirmed from src/components/Pipeline.tsx:35-41

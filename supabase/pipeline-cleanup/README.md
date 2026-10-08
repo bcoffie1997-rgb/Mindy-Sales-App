@@ -1,6 +1,7 @@
 # Pipeline cleanup — 2026-10-08
 
-Data-only update to the `leads` table. No application code was changed.
+Data-only update to the `leads` table: **25 contacts + 3 duplicate merges**.
+No application code was changed.
 
 ## Why SQL and not a direct write
 
@@ -19,7 +20,7 @@ table printed here. It reports exactly what the apply step will do.
 |---|------|--------------|-------|
 | 1 | `01-backup.sql` | Snapshots `leads` to `leads_backup_2026_10_08`, verifies the row counts match, optionally exports JSON. Contains the rollback. | writes a new table only |
 | 2 | `02-dry-run.sql` | Q1 change table · Q2 every other pipeline lead · Q3 "AK" + ~$20K/~$11K-per-month flags · Q4 duplicate & secondary-email check | read-only |
-| 3 | `03-apply.sql` | Applies the 24 rows inside a transaction | **the write** |
+| 3 | `03-apply.sql` | Applies the 25 contacts, then closes the 3 duplicates, inside one transaction | **the write** |
 | 4 | `04-verify.sql` | Final board: count + total `opp_value` per stage, the two header cards, BD roster | read-only |
 
 `00-incoming.sql` and `_dataset.sql` are the shared dataset. `_dataset.sql` is
@@ -35,8 +36,13 @@ never disagree. **If you edit a person, edit them in `02` and `03` both.**
 - No lead outside the 24 is touched — verified by diffing against the backup.
 - `type` is never flipped to `'client'`; that would drop the row off the board,
   since `/api/leads-only` filters `type <> 'client'`.
-- `last_action_date` is only reset when the stage actually moved, so rows that
-  were already correct keep their real aging.
+- `last_action_date` uses the real payment date where one was given
+  (Delmar 2026-10-01, Tim 2026-09-22, Vance 2026-06-15). Kamesha and Amir fall
+  back to 2026-09-01 **only if** they have no date already. Everyone else is
+  only reset when the stage actually moved, so correct rows keep their aging.
+- Merges never delete. The duplicate row survives as `closed_lost` carrying a
+  "Merged into X" note; the secondary email is written into the main row's notes.
+- The "AK" and ~$20K / ~$11K-per-month rows are **flagged only, never written**.
 
 ## Stage → status values (from `src/components/Pipeline.tsx:35`)
 
