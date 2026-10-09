@@ -1,8 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent, type WheelEvent } from 'react'
-import { RefreshCw, ChevronLeft, ChevronRight, DollarSign, TrendingUp, Download, Eye, EyeOff, Pin, PinOff } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent, type WheelEvent } from 'react'
+import { RefreshCw, ChevronLeft, ChevronRight, DollarSign, TrendingUp, Download, Eye, EyeOff, Pin, PinOff, Search, Plus, X } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { apiJSON, errorMessage } from '../lib/api'
-import { compareCards, isInPipeline, temperatureOf, TEMPERATURE_BADGE } from '../lib/pipeline'
+import {
+  compareCards, isInPipeline, temperatureOf, TEMPERATURE_BADGE, searchLeads,
+  buildNewLeadBody, STAGE_OPTIONS, type Temperature, type NewLeadInput,
+} from '../lib/pipeline'
 
 interface Lead {
   id: string
@@ -80,6 +83,105 @@ const VALUE_PRESETS = [
   { label: 'BD', sub: '$4k/mo', value: 48000 },
 ]
 
+/** "+ New lead" — someone not in the system yet. */
+function NewLeadForm({
+  onClose, onCreate,
+}: {
+  onClose: () => void
+  onCreate: (input: NewLeadInput) => Promise<void>
+}) {
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [company, setCompany] = useState('')
+  const [phone, setPhone] = useState('')
+  const [status, setStatus] = useState('meeting_interest')
+  const [temperature, setTemperature] = useState<Temperature>('warm')
+  const [value, setValue] = useState('')
+  const [note, setNote] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [formError, setFormError] = useState('')
+
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    if (!name.trim()) return
+    setSaving(true)
+    setFormError('')
+    try {
+      await onCreate({
+        name, email, company, phone, status, temperature,
+        oppValue: value === '' ? null : Number(value),
+        note,
+      })
+      onClose()
+    } catch (err) {
+      setFormError(errorMessage(err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+      <form onSubmit={submit} className="card w-full max-w-lg p-5 space-y-3 my-auto">
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-bold text-white">New lead</h3>
+          <button type="button" onClick={onClose} className="btn-ghost px-2" aria-label="Close"><X size={18} /></button>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="sm:col-span-2">
+            <label className="text-xs text-slate-500 block mb-1">Name *</label>
+            <input autoFocus required value={name} onChange={e => setName(e.target.value)} className="input-dark w-full text-sm" />
+          </div>
+          <div>
+            <label className="text-xs text-slate-500 block mb-1">Email</label>
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)} className="input-dark w-full text-sm" />
+          </div>
+          <div>
+            <label className="text-xs text-slate-500 block mb-1">Phone</label>
+            <input value={phone} onChange={e => setPhone(e.target.value)} className="input-dark w-full text-sm" />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="text-xs text-slate-500 block mb-1">Company</label>
+            <input value={company} onChange={e => setCompany(e.target.value)} className="input-dark w-full text-sm" />
+          </div>
+          <div>
+            <label className="text-xs text-slate-500 block mb-1">Stage</label>
+            <select value={status} onChange={e => setStatus(e.target.value)} className="input-dark w-full text-sm">
+              {STAGE_OPTIONS.map(o => <option key={o.status} value={o.status} className="bg-slate-900">{o.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-slate-500 block mb-1">Temperature</label>
+            <select value={temperature} onChange={e => setTemperature(e.target.value as Temperature)} className="input-dark w-full text-sm">
+              <option value="hot" className="bg-slate-900">Hot</option>
+              <option value="warm" className="bg-slate-900">Warm</option>
+              <option value="cold" className="bg-slate-900">Cold</option>
+            </select>
+          </div>
+          <div className="sm:col-span-2">
+            <label className="text-xs text-slate-500 block mb-1">Deal value ($/yr)</label>
+            <input type="number" min="0" value={value} onChange={e => setValue(e.target.value)} placeholder="6000" className="input-dark w-full text-sm" />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="text-xs text-slate-500 block mb-1">Note</label>
+            <textarea rows={3} value={note} onChange={e => setNote(e.target.value)} className="input-dark w-full text-sm resize-none" />
+          </div>
+        </div>
+
+        {formError && <p role="alert" className="text-sm text-red-300">{formError}</p>}
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" onClick={onClose} className="btn-ghost text-sm">Cancel</button>
+          <button type="submit" disabled={saving || !name.trim()} className="btn-primary text-sm disabled:opacity-50">
+            {saving ? 'Creating…' : 'Create lead'}
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
 export default function Pipeline() {
   const navigate = useNavigate()
   const scrollerRef = useRef<HTMLDivElement>(null)
@@ -89,6 +191,12 @@ export default function Pipeline() {
   const [draggedId, setDraggedId] = useState<string | null>(null)
   const [dropTarget, setDropTarget] = useState<string | null>(null)
   const [showAll, setShowAll] = useState(false)
+  const [addQuery, setAddQuery] = useState('')
+  const [addPick, setAddPick] = useState<Lead | null>(null)
+  const [addStage, setAddStage] = useState('meeting_interest')
+  const [addTemp, setAddTemp] = useState<Temperature>('warm')
+  const [addBusy, setAddBusy] = useState(false)
+  const [newOpen, setNewOpen] = useState(false)
   const [pinningId, setPinningId] = useState<string | null>(null)
   const [editingValueId, setEditingValueId] = useState<string | null>(null)
   const [customValue, setCustomValue] = useState('')
@@ -123,6 +231,9 @@ export default function Pipeline() {
     for (const list of map.values()) list.sort(compareCards)
     return map
   }, [visible])
+
+  // Search spans ALL leads, so you can pull an imported one onto the board.
+  const addResults = useMemo(() => searchLeads(leads, addQuery), [leads, addQuery])
 
   const stats = useMemo(() => {
     const monthPrefix = new Date().toISOString().slice(0, 7)
@@ -178,24 +289,52 @@ export default function Pipeline() {
     }
   }
 
-  async function togglePipeline(lead: Lead) {
-    const next = !isInPipeline(lead.metadata)
-    setPinningId(lead.id)
+  /** Merge metadata keys onto one lead, optimistically, rolling back on failure. */
+  async function patchMetadata(lead: Lead, patch: Record<string, unknown>, extra?: Record<string, unknown>) {
     const previous = leads
-    const metadata = { ...(lead.metadata || {}), in_pipeline: next }
-    setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, metadata } : l))
+    const metadata = { ...(lead.metadata || {}), ...patch }
+    setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, metadata, ...(extra || {}) } : l))
     try {
       await apiJSON(`/api/leads?id=${encodeURIComponent(lead.id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ metadata }),
+        body: JSON.stringify({ metadata, ...(extra || {}) }),
       })
+      setError('')
     } catch (err) {
       setLeads(previous)
       setError(errorMessage(err))
-    } finally {
-      setPinningId(null)
     }
+  }
+
+  async function togglePipeline(lead: Lead) {
+    setPinningId(lead.id)
+    await patchMetadata(lead, { in_pipeline: !isInPipeline(lead.metadata) })
+    setPinningId(null)
+  }
+
+  async function setTemperature(lead: Lead, temperature: Temperature) {
+    if (temperatureOf(lead.metadata) === temperature) return
+    await patchMetadata(lead, { temperature })
+  }
+
+  /** Pin an existing lead onto the board at a chosen stage and temperature. */
+  async function addExisting() {
+    if (!addPick) return
+    setAddBusy(true)
+    await patchMetadata(addPick, { in_pipeline: true, temperature: addTemp }, { status: addStage })
+    setAddBusy(false)
+    setAddPick(null)
+    setAddQuery('')
+  }
+
+  async function createLead(input: Parameters<typeof buildNewLeadBody>[0]) {
+    const created = await apiJSON<Lead>('/api/leads', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildNewLeadBody(input)),
+    })
+    setLeads(prev => [created, ...prev])
   }
 
   function startDrag(event: DragEvent<HTMLDivElement>, lead: Lead) {
@@ -297,6 +436,93 @@ export default function Pipeline() {
       </div>
       {error && <div role="alert" className="card border-red-500/30 p-3 text-sm text-red-300">{error}</div>}
 
+      {/* Add to pipeline — search every lead, or create someone new */}
+      <div className="flex flex-col sm:flex-row gap-2 sm:items-start">
+        <div className="relative flex-1 min-w-0 sm:max-w-md">
+          <Search size={16} className="absolute left-3 top-3 text-slate-500 pointer-events-none" />
+          <input
+            type="text"
+            value={addQuery}
+            onChange={e => { setAddQuery(e.target.value); setAddPick(null) }}
+            placeholder="Add to pipeline — search name, email or company…"
+            className="input-dark w-full pl-9 pr-3"
+            aria-label="Add an existing lead to the pipeline"
+          />
+          {addQuery.trim().length >= 2 && !addPick && (
+            <div className="absolute z-30 mt-1 w-full card p-1 max-h-64 overflow-y-auto">
+              {addResults.length === 0 && (
+                <p className="text-xs text-slate-500 px-3 py-2">No lead matches that. Use “+ New lead”.</p>
+              )}
+              {addResults.map(lead => (
+                <button
+                  key={lead.id}
+                  onClick={() => {
+                    setAddPick(lead)
+                    setAddStage(lead.status || 'meeting_interest')
+                    setAddTemp(temperatureOf(lead.metadata) || 'warm')
+                  }}
+                  className="w-full text-left px-3 py-2 rounded-lg hover:bg-white/5 transition-colors"
+                >
+                  <span className="block text-sm text-slate-100">
+                    {lead.name}
+                    {isInPipeline(lead.metadata) && (
+                      <span className="ml-2 text-[10px] text-emerald-400">already on board</span>
+                    )}
+                  </span>
+                  <span className="block text-xs text-slate-500 truncate">
+                    {[lead.company, lead.email].filter(Boolean).join(' · ')}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {addPick && (
+          <div className="card p-3 flex flex-col sm:flex-row sm:items-end gap-2 flex-1">
+            <div className="min-w-0 flex-1">
+              <p className="text-xs text-slate-500">Adding</p>
+              <p className="text-sm font-medium text-white truncate">{addPick.name}</p>
+            </div>
+            <div>
+              <label className="text-[10px] text-slate-500 block mb-1">Stage</label>
+              <select value={addStage} onChange={e => setAddStage(e.target.value)} className="input-dark text-sm py-1.5">
+                {STAGE_OPTIONS.map(o => (
+                  <option key={o.status} value={o.status} className="bg-slate-900">{o.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] text-slate-500 block mb-1">Temperature</label>
+              <select value={addTemp} onChange={e => setAddTemp(e.target.value as Temperature)} className="input-dark text-sm py-1.5">
+                <option value="hot" className="bg-slate-900">Hot</option>
+                <option value="warm" className="bg-slate-900">Warm</option>
+                <option value="cold" className="bg-slate-900">Cold</option>
+              </select>
+            </div>
+            <button onClick={addExisting} disabled={addBusy} className="btn-primary text-sm px-3 py-1.5 disabled:opacity-50 shrink-0">
+              {addBusy ? 'Adding…' : 'Add'}
+            </button>
+            <button onClick={() => { setAddPick(null); setAddQuery('') }} className="btn-ghost px-2 shrink-0" aria-label="Cancel">
+              <X size={16} />
+            </button>
+          </div>
+        )}
+
+        {!addPick && (
+          <button onClick={() => setNewOpen(true)} className="btn-primary flex items-center gap-1.5 text-sm shrink-0 self-start">
+            <Plus size={15} /> New lead
+          </button>
+        )}
+      </div>
+
+      {newOpen && (
+        <NewLeadForm
+          onClose={() => setNewOpen(false)}
+          onCreate={createLead}
+        />
+      )}
+
       {/* Value summary */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-2xl">
         <div className="card p-4 flex items-center gap-3">
@@ -373,19 +599,27 @@ export default function Pipeline() {
                   >
                     <div className="flex items-start justify-between gap-2">
                       <p className="text-sm font-medium text-white leading-snug">{lead.name}</p>
-                      <span className="flex items-center gap-1 shrink-0">
-                        {(() => {
-                          const temp = temperatureOf(lead.metadata)
-                          if (!temp) return null
-                          return (
-                            <span
-                              className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border uppercase ${TEMPERATURE_BADGE[temp]}`}
-                              title={`${temp} lead`}
-                            >
-                              {temp}
-                            </span>
-                          )
-                        })()}
+                      <span className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
+                        {/* Quick temperature switch — click a letter to set it */}
+                        <span className="flex items-center rounded-full border border-white/10 overflow-hidden">
+                          {(['hot', 'warm', 'cold'] as Temperature[]).map(t => {
+                            const active = temperatureOf(lead.metadata) === t
+                            return (
+                              <button
+                                key={t}
+                                onClick={() => setTemperature(lead, t)}
+                                title={`Mark ${t}`}
+                                aria-label={`Mark ${lead.name} ${t}`}
+                                aria-pressed={active}
+                                className={`px-1.5 py-0.5 text-[10px] font-bold uppercase transition-colors ${
+                                  active ? TEMPERATURE_BADGE[t] : 'text-slate-600 hover:text-slate-300'
+                                }`}
+                              >
+                                {t[0]}
+                              </button>
+                            )
+                          })}
+                        </span>
                         <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${SCORE_CLASSES[lead.score] || 'bg-white/10 text-slate-400'}`}>
                           {lead.score}
                         </span>
