@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { ArrowLeft, CheckCircle, Circle, Plus, RefreshCw, Phone, Calendar } from 'lucide-react'
 import { apiJSON, errorMessage } from '../lib/api'
+import { paymentStatus, paidOfLabel, balanceLabel } from '../lib/payments'
 
 interface Task { id: string; text: string; done: boolean }
 interface Session { n: number; done: boolean; date: string; note: string }
@@ -200,6 +201,9 @@ export default function DetailView({ mode = 'client' }: { mode?: 'client' | 'lea
   const pct = deliverables.length ? Math.round(delivsDone / deliverables.length * 100) : sessTotal ? Math.round(sessDone / sessTotal * 100) : 0
   const monthPrefix = new Date().toISOString().slice(0, 7)
   const callsThisMonth = callLog.filter(c => (c.date || '').startsWith(monthPrefix)).length
+  // Partial-payment state lives in metadata and is read-only here; the autosave
+  // above preserves it because it spreads the existing metadata.
+  const pay = paymentStatus(client.metadata)
 
   return (
     <div className="p-4 sm:p-6 space-y-5 max-w-4xl">
@@ -247,6 +251,28 @@ export default function DetailView({ mode = 'client' }: { mode?: 'client' | 'lea
           {client.client_start_date && <span className="text-xs text-slate-500">Since {fmtDate(client.client_start_date)}</span>}
         </div>
       </div>
+
+      {/* Consulting payment plan — amount paid, balance, next due date */}
+      {pay && (
+        <div className="card p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+          <div className="flex-1 min-w-0">
+            <h3 className="text-sm font-semibold text-slate-200">Consulting Payment</h3>
+            <p className="text-lg font-bold text-white mt-0.5">{paidOfLabel(pay)}</p>
+            <div className="h-1.5 bg-white/10 rounded-full overflow-hidden mt-2 max-w-xs">
+              <div
+                className={`h-full rounded-full ${pay.balance > 0 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                style={{ width: `${Math.min(100, Math.round(pay.paid / pay.total * 100))}%` }}
+              />
+            </div>
+          </div>
+          {pay.balance > 0 && (
+            <span className="badge-red shrink-0">{balanceLabel(pay)}</span>
+          )}
+          {pay.balance <= 0 && (
+            <span className="badge-green shrink-0">Paid in full</span>
+          )}
+        </div>
+      )}
 
       {/* Payment summary */}
       {(payments.lifetime || payments.thisMonth || payments.lastMonth) && (

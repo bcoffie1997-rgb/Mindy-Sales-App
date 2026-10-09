@@ -1,0 +1,43 @@
+-- ============================================================================
+-- Pipeline cleanup — 2026-10-08 — SHARED DATASET (reference copy)
+-- ============================================================================
+-- Single source of truth: 25 contacts + 3 duplicate rows to merge away.
+-- It is INLINED verbatim into 02-dry-run.sql and 03-apply.sql so the dry run
+-- and the apply can never drift apart. If you edit a row here, edit it in
+-- both of those files too -- or just run `python3 build.py`, which regenerates
+-- them from _dataset.sql. Nothing in this file executes on its own.
+--
+-- Columns:
+--   ref                 your list number
+--   full_name           name used for the name-fallback match
+--   alt_name            second spelling to try on the name match (nullable)
+--   company             written only when creating a NEW row
+--   email               primary match key (case-insensitive)
+--   new_status          the exact `status` value the Pipeline STAGES array writes
+--   opp_value           metadata.opp_value; NULL = leave the key alone entirely
+--   clear_opp_value     true = DELETE the opp_value key (used for Lost deals)
+--   set_managed         metadata.managed = true  (shows row in BD / Consulting)
+--   sessions_total      metadata.sessions_total
+--   all_sessions_done   build a 12-element metadata.sessions array, all done
+--   in_pipeline         metadata.in_pipeline = true (puts the row on the board)
+--   temperature         metadata.temperature 'hot' | 'warm' | 'cold'; NULL = no badge
+--   amount_paid         metadata.amount_paid      (number)
+--   balance_due         metadata.balance_due      (number)
+--   next_payment_due    metadata.next_payment_due (string 'YYYY-MM-DD')
+--   set_date            always write this last_action_date (real payment date)
+--   fallback_date       write it ONLY if the row has no last_action_date yet
+--   note                appended to notes, never overwrites
+--
+-- A second VALUES block, `merges`, closes out duplicate rows. The surviving
+-- contact carries the secondary email in its notes; the duplicate row is moved
+-- to closed_lost with a "Merged into X" note. Nothing is ever deleted.
+-- ============================================================================
+
+-- status values confirmed from src/components/Pipeline.tsx:35-41
+--   Interested    -> 'meeting_interest'
+--   Call Booked   -> 'booked'
+--   Call Done     -> 'call_completed'
+--   Proposal Sent -> 'proposal_sent'
+--   No Show       -> 'no_show'
+--   Won           -> 'closed_won'
+--   Lost          -> 'closed_lost'
