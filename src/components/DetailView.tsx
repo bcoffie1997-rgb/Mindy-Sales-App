@@ -1,8 +1,8 @@
 import { useEffect, useState, useRef } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { ArrowLeft, CheckCircle, Circle, Plus, RefreshCw, Phone, Calendar } from 'lucide-react'
+import { ArrowLeft, CheckCircle, Circle, Plus, RefreshCw, Phone, Calendar, Wallet } from 'lucide-react'
 import { apiJSON, errorMessage } from '../lib/api'
-import { paymentStatus, paidOfLabel, balanceLabel } from '../lib/payments'
+import { paymentStatus, paidOfLabel, balanceLabel, paymentHistory, applyPayment, fmtUSD } from '../lib/payments'
 
 interface Task { id: string; text: string; done: boolean }
 interface Session { n: number; done: boolean; date: string; note: string }
@@ -49,6 +49,13 @@ export default function DetailView({ mode = 'client' }: { mode?: 'client' | 'lea
   const [newDeliverable, setNewDeliverable] = useState('')
   const [callLog, setCallLog] = useState<CallEntry[]>([])
   const [callsPerMonth, setCallsPerMonth] = useState<number | ''>('')
+  const [amountPaid, setAmountPaid] = useState<number | ''>('')
+  const [balanceDue, setBalanceDue] = useState<number | ''>('')
+  const [nextPaymentDue, setNextPaymentDue] = useState('')
+  const [paymentLog, setPaymentLog] = useState<{ amount: number; date: string; note?: string }[]>([])
+  const [payAmount, setPayAmount] = useState('')
+  const [payDate, setPayDate] = useState('')
+  const [payNote, setPayNote] = useState('')
   const [newCallDate, setNewCallDate] = useState('')
   const [newCallTopics, setNewCallTopics] = useState('')
   const autoSaveRef = useRef(false)
@@ -86,6 +93,10 @@ export default function DetailView({ mode = 'client' }: { mode?: 'client' | 'lea
       setDeliverables(delivs)
       setCallLog(Array.isArray(meta.call_log) ? meta.call_log : [])
       setCallsPerMonth(typeof meta.calls_per_month === 'number' ? meta.calls_per_month : '')
+      setAmountPaid(typeof meta.amount_paid === 'number' ? meta.amount_paid : '')
+      setBalanceDue(typeof meta.balance_due === 'number' ? meta.balance_due : '')
+      setNextPaymentDue(typeof meta.next_payment_due === 'string' ? meta.next_payment_due.slice(0, 10) : '')
+      setPaymentLog(Array.isArray(meta.payments) ? meta.payments : [])
     }
     setData(result)
     setLoading(false)
@@ -98,7 +109,8 @@ export default function DetailView({ mode = 'client' }: { mode?: 'client' | 'lea
     if (!dirty || loading || !data?.client) return
     const t = setTimeout(() => save(), 900)
     return () => clearTimeout(t)
-  }, [dirty, tier, consultant, currentStatus, nextStep, notes, tasks, managed, sessionsTotal, sessions, deliverables, callLog, callsPerMonth])
+  }, [dirty, tier, consultant, currentStatus, nextStep, notes, tasks, managed, sessionsTotal,
+      sessions, deliverables, callLog, callsPerMonth, amountPaid, balanceDue, nextPaymentDue, paymentLog])
 
   async function save() {
     if (!data?.client) return
@@ -116,6 +128,12 @@ export default function DetailView({ mode = 'client' }: { mode?: 'client' | 'lea
       deliverables,
       call_log: callLog,
       calls_per_month: callsPerMonth === '' ? null : Number(callsPerMonth),
+      // Payment fields are edited on this page, so they are saved from state
+      // rather than inherited from the spread above.
+      amount_paid: amountPaid === '' ? null : Number(amountPaid),
+      balance_due: balanceDue === '' ? null : Number(balanceDue),
+      next_payment_due: nextPaymentDue || null,
+      payments: paymentLog,
     }
     try {
       const client = await apiJSON<any>(`/api/leads?id=${encodeURIComponent(id || '')}`, {
@@ -179,6 +197,31 @@ export default function DetailView({ mode = 'client' }: { mode?: 'client' | 'lea
     markDirty()
   }
 
+  /**
+   * Record a payment. Computes the new figures with the shared helper, then
+   * hands them to the existing autosave rather than issuing its own PATCH —
+   * one writer means an in-flight save can never clobber the other.
+   */
+  function recordPayment() {
+    const amount = Number(payAmount)
+    if (!Number.isFinite(amount) || amount <= 0) return
+    const next = applyPayment(
+      { amount_paid: amountPaid === '' ? 0 : Number(amountPaid),
+        balance_due: balanceDue === '' ? 0 : Number(balanceDue),
+        next_payment_due: nextPaymentDue || null,
+        payments: paymentLog },
+      { amount, date: payDate || new Date().toISOString().slice(0, 10), note: payNote },
+    )
+    setAmountPaid(next.amount_paid ?? '')
+    setBalanceDue(next.balance_due ?? '')
+    setNextPaymentDue(next.next_payment_due || '')
+    setPaymentLog(next.payments)
+    setPayAmount('')
+    setPayDate('')
+    setPayNote('')
+    markDirty()
+  }
+
   function removeCallEntry(entryId: string) {
     setCallLog(prev => prev.filter(c => c.id !== entryId))
     markDirty()
@@ -203,7 +246,13 @@ export default function DetailView({ mode = 'client' }: { mode?: 'client' | 'lea
   const callsThisMonth = callLog.filter(c => (c.date || '').startsWith(monthPrefix)).length
   // Partial-payment state lives in metadata and is read-only here; the autosave
   // above preserves it because it spreads the existing metadata.
-  const pay = paymentStatus(client.metadata)
+  // Derived from live state, so the card updates the moment you edit or record.
+  const pay = paymentStatus({
+    amount_paid: amountPaid === '' ? undefined : Number(amountPaid),
+    balance_due: balanceDue === '' ? undefined : Number(balanceDue),
+    next_payment_due: nextPaymentDue || undefined,
+  })
+  const history = paymentHistory({ payments: paymentLog })
 
   return (
     <div className="p-4 sm:p-6 space-y-5 max-w-4xl">
@@ -252,24 +301,102 @@ export default function DetailView({ mode = 'client' }: { mode?: 'client' | 'lea
         </div>
       </div>
 
-      {/* Consulting payment plan — amount paid, balance, next due date */}
-      {pay && (
-        <div className="card p-4 flex flex-col sm:flex-row sm:items-center gap-3">
-          <div className="flex-1 min-w-0">
-            <h3 className="text-sm font-semibold text-slate-200">Consulting Payment</h3>
-            <p className="text-lg font-bold text-white mt-0.5">{paidOfLabel(pay)}</p>
-            <div className="h-1.5 bg-white/10 rounded-full overflow-hidden mt-2 max-w-xs">
-              <div
-                className={`h-full rounded-full ${pay.balance > 0 ? 'bg-amber-500' : 'bg-emerald-500'}`}
-                style={{ width: `${Math.min(100, Math.round(pay.paid / pay.total * 100))}%` }}
+      {/* Consulting payment — editable, with a record-payment box and history */}
+      {(mode === 'client' || isManagement || pay) && (
+        <div className="card p-4 space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+            <div className="flex-1 min-w-0">
+              <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+                <Wallet size={14} className="text-purple-400" /> Consulting Payment
+              </h3>
+              {pay ? (
+                <>
+                  <p className="text-lg font-bold text-white mt-0.5">{paidOfLabel(pay)}</p>
+                  <div className="h-1.5 bg-white/10 rounded-full overflow-hidden mt-2 max-w-xs">
+                    <div
+                      className={`h-full rounded-full ${pay.balance > 0 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                      style={{ width: `${Math.min(100, Math.round(pay.paid / pay.total * 100))}%` }}
+                    />
+                  </div>
+                </>
+              ) : (
+                <p className="text-xs text-slate-500 mt-0.5">No payment plan recorded yet.</p>
+              )}
+            </div>
+            {pay && pay.balance > 0 && <span className="badge-red shrink-0">{balanceLabel(pay)}</span>}
+            {pay && pay.balance <= 0 && <span className="badge-green shrink-0">Paid in full</span>}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1 border-t border-white/5">
+            <div>
+              <label className="text-xs text-slate-500 block mb-1">Amount paid ($)</label>
+              <input
+                type="number" min="0" value={amountPaid}
+                onChange={e => { setAmountPaid(e.target.value === '' ? '' : Number(e.target.value)); markDirty() }}
+                className="input-dark w-full text-sm"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 block mb-1">Balance due ($)</label>
+              <input
+                type="number" min="0" value={balanceDue}
+                onChange={e => { setBalanceDue(e.target.value === '' ? '' : Number(e.target.value)); markDirty() }}
+                className="input-dark w-full text-sm"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 block mb-1">Next payment due</label>
+              <input
+                type="date" value={nextPaymentDue}
+                onChange={e => { setNextPaymentDue(e.target.value); markDirty() }}
+                className="input-dark w-full text-sm"
               />
             </div>
           </div>
-          {pay.balance > 0 && (
-            <span className="badge-red shrink-0">{balanceLabel(pay)}</span>
-          )}
-          {pay.balance <= 0 && (
-            <span className="badge-green shrink-0">Paid in full</span>
+
+          <div className="pt-1 border-t border-white/5">
+            <label className="text-xs text-slate-500 block mb-1">Record a payment</label>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                type="number" min="0" value={payAmount}
+                onChange={e => setPayAmount(e.target.value)}
+                placeholder="Amount" className="input-dark text-sm sm:w-28"
+              />
+              <input
+                type="date" value={payDate}
+                onChange={e => setPayDate(e.target.value)}
+                className="input-dark text-sm sm:w-36"
+              />
+              <input
+                value={payNote}
+                onChange={e => setPayNote(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && recordPayment()}
+                placeholder="Note (optional)" className="input-dark flex-1 text-sm"
+              />
+              <button
+                onClick={recordPayment}
+                disabled={!payAmount || Number(payAmount) <= 0}
+                className="btn-primary text-sm px-3 shrink-0 disabled:opacity-50"
+              >
+                Record
+              </button>
+            </div>
+            <p className="text-[10px] text-slate-500 mt-1">
+              Adds to amount paid, takes the same off the balance, and clears the due date once nothing is owed.
+            </p>
+          </div>
+
+          {history.length > 0 && (
+            <div className="pt-1 border-t border-white/5 space-y-1.5">
+              <p className="text-xs font-medium text-slate-400">Payment history ({history.length})</p>
+              {history.map((entry, i) => (
+                <div key={`${entry.date}-${i}`} className="flex items-start gap-3 py-1 border-b border-white/5 last:border-0">
+                  <span className="text-xs text-slate-500 shrink-0 w-24 pt-0.5">{fmtDate(entry.date)}</span>
+                  <span className="text-sm font-medium text-emerald-400 shrink-0 w-20">{fmtUSD(entry.amount)}</span>
+                  {entry.note && <span className="flex-1 text-xs text-slate-400">{entry.note}</span>}
+                </div>
+              ))}
+            </div>
           )}
         </div>
       )}

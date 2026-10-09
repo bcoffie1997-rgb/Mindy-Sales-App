@@ -51,6 +51,86 @@ export function paymentStatus(metadata: unknown): PaymentStatus | null {
   }
 }
 
+/** One recorded payment, stored in `metadata.payments`. */
+export interface PaymentEntry {
+  amount: number
+  date: string
+  note?: string
+}
+
+export function paymentHistory(metadata: unknown): PaymentEntry[] {
+  const raw = (metadata as Record<string, unknown> | null)?.payments
+  if (!Array.isArray(raw)) return []
+  const parsed: { entry: PaymentEntry; index: number }[] = []
+  raw.forEach((entry, index) => {
+    const e = (entry || {}) as Record<string, unknown>
+    const amount = toNumber(e.amount)
+    if (amount === null) return
+    const note = typeof e.note === 'string' && e.note.trim() ? e.note.trim() : undefined
+    parsed.push({
+      index,
+      entry: {
+        amount,
+        date: typeof e.date === 'string' ? e.date.slice(0, 10) : '',
+        ...(note ? { note } : {}),
+      },
+    })
+  })
+  // Newest first. Payments recorded on the SAME day tie on date, so fall back
+  // to the stored order reversed — the one entered last shows at the top.
+  parsed.sort((a, b) => {
+    const byDate = (b.entry.date || '').localeCompare(a.entry.date || '')
+    return byDate !== 0 ? byDate : b.index - a.index
+  })
+  return parsed.map(p => p.entry)
+}
+
+/** The metadata fields a manual edit of the payment card writes. */
+export interface PaymentFields {
+  amount_paid: number | null
+  balance_due: number | null
+  next_payment_due: string | null
+}
+
+/**
+ * Apply a recorded payment to existing metadata and return ONLY the payment
+ * keys that change. Pure, so the UI and the tests exercise the same maths.
+ *
+ * - adds to amount_paid, takes the same off balance_due (never below zero)
+ * - appends to the payments log
+ * - clears next_payment_due once the balance reaches zero
+ */
+export function applyPayment(
+  metadata: unknown,
+  payment: { amount: number; date: string; note?: string },
+): PaymentFields & { payments: PaymentEntry[] } {
+  const meta = (metadata || {}) as Record<string, unknown>
+  const paidBefore = toNumber(meta.amount_paid) ?? 0
+  const balanceBefore = toNumber(meta.balance_due) ?? 0
+
+  const amount = Math.max(0, payment.amount)
+  const paid = paidBefore + amount
+  const balance = Math.max(0, balanceBefore - amount)
+
+  const entry: PaymentEntry = {
+    amount,
+    date: payment.date || new Date().toISOString().slice(0, 10),
+    ...(payment.note && payment.note.trim() ? { note: payment.note.trim() } : {}),
+  }
+  // Keep the stored log in chronological order; the UI sorts for display.
+  const existing = Array.isArray(meta.payments) ? (meta.payments as PaymentEntry[]) : []
+
+  return {
+    amount_paid: paid,
+    balance_due: balance,
+    // Nothing left owing means there is no next payment to chase
+    next_payment_due: balance > 0
+      ? (typeof meta.next_payment_due === 'string' ? meta.next_payment_due : null)
+      : null,
+    payments: [...existing, entry],
+  }
+}
+
 export function fmtUSD(amount: number): string {
   return '$' + Math.round(amount).toLocaleString('en-US')
 }

@@ -417,6 +417,48 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
+    // POST /api/leads — create one lead or client from the dashboard.
+    // Used by "+ New lead" on the pipeline board and "+ Add client" on BD.
+    if (path === 'leads' && method === 'POST') {
+      const b = req.body || {}
+      const name = typeof b.name === 'string' ? b.name.trim() : ''
+      if (!name) return res.status(400).json({ error: 'Name is required' })
+
+      const email = typeof b.email === 'string' ? b.email.trim().toLowerCase() : ''
+      // Refuse a duplicate email rather than silently creating a second record
+      if (email) {
+        const { data: clash } = await supabase.from('leads').select('id,name').ilike('email', email).limit(1)
+        if (clash && clash.length) {
+          return res.status(409).json({ error: `${clash[0].name} already exists with that email`, existingId: clash[0].id })
+        }
+      }
+
+      const slug = (email || name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+      const row: any = {
+        id: `manual-${Date.now()}-${slug}`.slice(0, 120),
+        type: b.type === 'client' ? 'client' : 'lead',
+        name,
+        email: email || null,
+        phone: typeof b.phone === 'string' && b.phone.trim() ? b.phone.trim() : null,
+        company: typeof b.company === 'string' && b.company.trim() ? b.company.trim() : null,
+        score: typeof b.score === 'string' && b.score ? b.score.toUpperCase() : 'WARM',
+        source: 'dashboard',
+        status: typeof b.status === 'string' && b.status ? b.status : 'new',
+        notes: typeof b.notes === 'string' && b.notes.trim() ? b.notes.trim() : null,
+        last_action: 'Created in dashboard',
+        last_action_date: new Date().toISOString(),
+        metadata: b.metadata && typeof b.metadata === 'object' && !Array.isArray(b.metadata) ? b.metadata : {},
+      }
+      if (typeof b.client_tier === 'string' && b.client_tier) row.client_tier = b.client_tier
+      if (typeof b.client_product === 'string' && b.client_product) row.client_product = b.client_product
+      if (typeof b.client_amount === 'number') row.client_amount = b.client_amount
+      if (typeof b.client_start_date === 'string' && b.client_start_date) row.client_start_date = b.client_start_date
+
+      const { data, error } = await supabase.from('leads').insert(row).select().single()
+      if (error) throw error
+      return res.json(normalizeLead(data))
+    }
+
     // GET /api/leads
     if (path === 'leads' && method === 'GET') {
       const data = await fetchAllRows('leads', '*', (q:any) => q.order('created_at',{ascending:false}))
